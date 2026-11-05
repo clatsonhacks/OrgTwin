@@ -3,6 +3,7 @@ export const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
 function token(): string {
   try { return localStorage.getItem("orgtwin_token") ?? ""; } catch { return ""; }
 }
+export function hasToken(): boolean { return !!token(); }
 export function setToken(t: string) {
   try { localStorage.setItem("orgtwin_token", t); } catch { /* storage unavailable */ }
 }
@@ -12,6 +13,7 @@ export async function api<T = any>(path: string, init: RequestInit = {}): Promis
     ...init,
     headers: { "Content-Type": "application/json", "X-Access-Token": token(), ...(init.headers || {}) },
   });
+  if (res.status === 401 && typeof window !== "undefined") window.dispatchEvent(new Event("orgtwin:unauthorized"));
   if (!res.ok) {
     let msg = `${res.status}`;
     try { msg = (await res.json()).detail ?? msg; } catch { /* not json */ }
@@ -22,6 +24,7 @@ export async function api<T = any>(path: string, init: RequestInit = {}): Promis
 
 export const post = <T = any>(path: string, body?: unknown) =>
   api<T>(path, { method: "POST", body: body === undefined ? undefined : JSON.stringify(body) });
+export const del = <T = any>(path: string) => api<T>(path, { method: "DELETE" });
 export const put = <T = any>(path: string, body: unknown) =>
   api<T>(path, { method: "PUT", body: JSON.stringify(body) });
 

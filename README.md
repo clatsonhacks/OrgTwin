@@ -139,6 +139,12 @@ import, and sandbox containment: no network, read-only, no secrets, timeout kill
 
 ### Keys (`.env`, never committed)
 
+Users connect Google Sheets, Gmail and Stripe from the app (**🔌 Connectors → Connect**, then sign in and click
+Allow). To turn on those sign-in popups, the admin registers OrgTwin as an OAuth app once:
+`GOOGLE_OAUTH_CLIENT_ID/SECRET` and `STRIPE_CONNECT_CLIENT_ID/SECRET_KEY`. The steps are in
+[docs/connectors.md](docs/connectors.md#one-click-sign-in-the-admins-one-time-setup). The other connectors open a
+short form in the app. Everything in the table below can still be set in `.env` instead.
+
 | Variable | Where to get it |
 |---|---|
 | `VULTR_INFERENCE_API_KEY` (+ optional `VULTR_INFERENCE_MODEL`) | Serverless Inference subscription |

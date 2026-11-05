@@ -35,6 +35,16 @@ class Settings:
     smtp_from = _env("SMTP_FROM")
     email_redirect_to = _env("EMAIL_REDIRECT_TO")  # safety: send every demo email here
     stripe_secret_key = _env("STRIPE_SECRET_KEY")
+    # One-click "Connect" popups. The admin registers OrgTwin once as an OAuth app with Google and
+    # with Stripe Connect; after that each user just signs in and allows access (no keys to copy).
+    google_oauth_client_id = _env("GOOGLE_OAUTH_CLIENT_ID")
+    google_oauth_client_secret = _env("GOOGLE_OAUTH_CLIENT_SECRET")
+    stripe_connect_client_id = _env("STRIPE_CONNECT_CLIENT_ID")        # ca_… (Connect settings, test mode)
+    stripe_connect_secret_key = _env("STRIPE_CONNECT_SECRET_KEY")      # the platform's sk_test_… key
+    # Filled in from the app when a user signs in (see userconfig.py), never from .env
+    google_refresh_token = ""
+    google_account = ""
+    stripe_account = ""
     slack_webhook_url = _env("SLACK_WEBHOOK_URL")
     discord_webhook_url = _env("DISCORD_WEBHOOK_URL")
     teams_webhook_url = _env("TEAMS_WEBHOOK_URL")
@@ -55,16 +65,21 @@ class Settings:
     # Optional access token for mutating endpoints on a public demo
     app_access_token = _env("APP_ACCESS_TOKEN")
     public_app_url = _env("PUBLIC_APP_URL", "http://localhost:3000")
+    # Where the API is reachable from the browser (OAuth redirects). Same origin as the app behind Caddy.
+    public_api_url = _env("PUBLIC_API_URL") or public_app_url
     cors_origins = [o for o in _env("CORS_ORIGINS", "http://localhost:3000").split(",") if o]
 
     # Execution pacing (seconds between steps) so the 3D view can animate
     step_delay_s = float(_env("STEP_DELAY_S", "1.2"))
 
+    def google_signed_in(self) -> bool:
+        return bool(self.google_refresh_token and self.google_oauth_client_id and self.google_oauth_client_secret)
+
     def modes(self) -> dict:
         return {
             "llm": "vultr" if self.inference_api_key else "mock",
-            "sheets": "google" if (self.google_sa_json and self.sheet_id) else "mock",
-            "email": "smtp" if (self.smtp_host and self.smtp_from) else "mock",
+            "sheets": "google" if (self.sheet_id and (self.google_sa_json or self.google_signed_in())) else "mock",
+            "email": "smtp" if (self.smtp_host and self.smtp_from) else "gmail" if self.google_signed_in() else "mock",
             "stripe": "stripe-test" if self.stripe_secret_key.startswith("sk_test_") else "mock",
             "slack": "webhook" if self.slack_webhook_url else "mock",
             "runner": self.runner,

@@ -7,8 +7,8 @@ import { teamColor } from "@/components/world/layout";
 
 /* ---------- top bar ---------- */
 
-export function TopBar({ org, metrics, status, onRebuild }: {
-  org: Org | null; metrics: Metrics | null; status: Status | null; onRebuild: () => void;
+export function TopBar({ org, metrics, status, onRebuild, onConnect }: {
+  org: Org | null; metrics: Metrics | null; status: Status | null; onRebuild: () => void; onConnect?: () => void;
 }) {
   const mocked = status ? Object.entries(status.modes).filter(([k, v]) => v === "mock" && k !== "runner").map(([k]) => k) : [];
   return (
@@ -31,10 +31,12 @@ export function TopBar({ org, metrics, status, onRebuild }: {
         </div>
       )}
       {status && (
-        <div className={`mode block ${status.demo_mode ? "mode-demo" : "mode-live"}`}
+        <button className={`mode block ${status.demo_mode ? "mode-demo" : "mode-live"}`} onClick={onConnect} disabled={!onConnect}
              title={Object.entries(status.modes).map(([k, v]) => `${k}: ${v}`).join("\n")}>
-          <i />{status.demo_mode ? <>Demo mode<small>mock: {mocked.join(", ")}</small></> : <>Live<small>Vultr inference + real connectors</small></>}
-        </div>
+          <i />{status.demo_mode
+            ? <>Demo mode<small>{onConnect ? "🔌 Connect your apps →" : `mock: ${mocked.join(", ")}`}</small></>
+            : <>Live<small>Vultr inference + real connectors</small></>}
+        </button>
       )}
     </header>
   );

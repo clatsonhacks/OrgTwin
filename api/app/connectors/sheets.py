@@ -35,11 +35,15 @@ def mode() -> str:
 
 def _client():
     import gspread
-    from google.oauth2.service_account import Credentials
-    raw = settings.google_sa_json
-    info = json.load(open(raw)) if os.path.exists(raw) else json.loads(raw)
-    creds = Credentials.from_service_account_info(
-        info, scopes=["https://www.googleapis.com/auth/spreadsheets"])
+    if settings.google_signed_in():  # the user clicked "Connect Google" and allowed access
+        from ..oauth import google_credentials
+        creds = google_credentials()
+    else:  # admin-provided service account (.env or pasted in the Connect form)
+        from google.oauth2.service_account import Credentials
+        raw = settings.google_sa_json
+        info = json.load(open(raw)) if os.path.exists(raw) else json.loads(raw)
+        creds = Credentials.from_service_account_info(
+            info, scopes=["https://www.googleapis.com/auth/spreadsheets"])
     return gspread.authorize(creds).open_by_key(settings.sheet_id).sheet1
 
 

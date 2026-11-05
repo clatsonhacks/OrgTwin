@@ -476,3 +476,44 @@ body { overscroll-behavior: none; }
 .run-step.todo { opacity: .55; }
 .run-text { white-space: pre-wrap; font: 12px/1.45 var(--body); background: var(--paper-2); border-radius: 6px; padding: 8px; margin: 6px 0 0; max-height: 220px; overflow: auto; }
 .web-results { margin: 6px 0 0; padding-left: 18px; font-size: 12px; display: grid; gap: 4px; }
+
+/* ---------- Connect popups ---------- */
+button.mode { text-align: left; cursor: pointer; color: inherit; }
+button.mode:disabled { cursor: default; }
+button.mode-demo:not(:disabled):hover small { color: var(--ink); text-decoration: underline; }
+.conn-row { display: flex; align-items: center; gap: 8px; padding-right: 10px; }
+.conn-row .conn-head { flex: 1; min-width: 0; }
+.btn-sm { font-size: 13px; padding: 4px 10px; border-width: 2px; flex: none; }
+.btn-done { background: #e7f6dd; color: var(--grass-d); }
+.modal-fixed { grid-template-columns: minmax(0, 1fr); justify-items: center; }
+.connect-modal, .unlock { width: min(480px, 100%); }
+.connect-body > * { min-width: 0; }
+.account-box .grow { min-width: 0; overflow-wrap: anywhere; }
+.connect-icon { font-size: 22px; display: grid; place-items: center; }
+.connect-body { display: grid; gap: 10px; }
+.connect-body .lead { margin: 0; }
+.connect-body h3 { margin: 4px 0 0; font-size: 15px; }
+.perm-list { margin: 0; padding: 10px 12px; list-style: none; display: grid; gap: 6px; background: #fff; border: 2px solid #d9cdb2; border-radius: 8px; font-size: 14px; }
+.signin-btn { margin-top: 4px; display: flex; align-items: center; justify-content: center; gap: 4px; }
+.signin-google { background: #fff; }
+.signin-stripe { background: #635bff; color: #fff; }
+.center-text { text-align: center; }
+.account-box { display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: #eef9e8; border: 2px solid var(--grass); border-radius: 8px; }
+.account-box b, .account-box .muted { display: block; }
+.ok-dot { width: 28px; height: 28px; border-radius: 50%; background: var(--grass); color: #fff; display: grid; place-items: center; font-weight: 700; flex: none; }
+.sheet-pick { display: grid; gap: 8px; }
+.sheet-pick .or { text-align: center; margin: 2px 0 -4px; }
+.manual-form { display: grid; gap: 10px; }
+.how-steps { margin: 0; padding-left: 20px; font-size: 14px; display: grid; gap: 4px; }
+.field { display: grid; gap: 4px; font-size: 13px; font-weight: 600; }
+.field small { font-weight: 400; color: var(--muted); }
+.field input, .field textarea { width: 100%; font-weight: 400; }
+.field textarea { font-family: ui-monospace, monospace; font-size: 12px; }
+.toggle-row { display: flex; gap: 8px; align-items: center; font-size: 14px; }
+.connect-foot { border-top: 2px dashed #d9cdb2; padding-top: 10px; }
+.unlock input { width: 100%; }
+.modal-fixed { position: fixed; }
+.sheet-pick > * { min-width: 0; }
+.sheet-pick .btn-wide { white-space: normal; }
+.sheet-pick .row { flex-wrap: nowrap; }
+.sheet-pick .row input { min-width: 0; flex: 1; }

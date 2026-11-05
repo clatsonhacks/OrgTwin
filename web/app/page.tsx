@@ -1,7 +1,7 @@
 "use client";
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { API_BASE, api, post, setToken } from "@/lib/api";
+import { API_BASE, api, hasToken, post } from "@/lib/api";
 import type { Approval, LiveEvent, Metrics, Org, Outbox, Status, Workflow } from "@/lib/types";
 import type { Courier } from "@/components/world/World";
 import StartCard from "@/components/ui/StartCard";
@@ -11,6 +11,7 @@ import { Activity, ApprovalCard, Departments, Hotbar, RunDetails, SidePanel, Ski
 import SkillRecorder from "@/components/ui/SkillRecorder";
 import OrgGraph from "@/components/ui/OrgGraph";
 import ConnectorsPanel from "@/components/ui/Connectors";
+import Unlock from "@/components/ui/Unlock";
 import FlowBuilder from "@/components/ui/FlowBuilder";
 import type { RunView } from "@/components/ui/Hud";
 import { teamColor } from "@/components/world/layout";
@@ -45,6 +46,7 @@ export default function Home() {
   const [showGraph, setShowGraph] = useState(false);
   const [graphVersion, setGraphVersion] = useState(0);
   const [showFlows, setShowFlows] = useState(false);
+  const [unlock, setUnlock] = useState(false);
   const [barWfId, setBarWfId] = useState<number | null>(null); // workflow on the bottom bar (null = lead-to-cash)
   const runIdRef = useRef<number | null>(null);
   runIdRef.current = runId;
@@ -69,10 +71,14 @@ export default function Home() {
   useEffect(() => {
     api<Status>("/api/status").then((s) => {
       setStatus(s);
-      if (s.auth_required && !localStorage.getItem("orgtwin_token")) setToken(window.prompt("Access token for this demo:") ?? "");
+      if (s.auth_required && !hasToken()) setUnlock(true);
     }).catch((e) => toast(`API not reachable: ${e.message}`, "bad"));
     refresh();
+    const onUnauthorized = () => setUnlock(true);
+    window.addEventListener("orgtwin:unauthorized", onUnauthorized);
+    return () => window.removeEventListener("orgtwin:unauthorized", onUnauthorized);
   }, [refresh, toast]);
+  const refreshStatus = useCallback(() => { api<Status>("/api/status").then(setStatus).catch(() => {}); }, []);
 
   // Live events from the API (Server-Sent Events) drive the world.
   useEffect(() => {
@@ -117,10 +123,12 @@ export default function Home() {
           refresh(); break;
         case "skill.saved":
           refresh(); break;
+        case "connector.connected": case "connector.tested":
+          refreshStatus(); break;
       }
     };
     return () => es.close();
-  }, [refresh, toast]);
+  }, [refresh, refreshStatus, toast]);
 
   const hero = workflows.find((w) => w.kind === "hero");
   const teamName = useCallback((k?: string) => org?.teams.find((t) => t.key === k)?.name ?? cap(k), [org]);
@@ -207,7 +215,8 @@ export default function Home() {
                onSelectRole={(t, r) => { setSelectedTeam(t); setSelectedRole(r); setPanel("team"); }} />
       </div>
 
-      <TopBar org={org} metrics={metrics} status={status} onRebuild={() => setOnboarding(true)} />
+      <TopBar org={org} metrics={metrics} status={status} onRebuild={() => setOnboarding(true)}
+              onConnect={org ? () => setPanel("connectors") : undefined} />
 
       {org && !showStart && (
         <>
@@ -257,7 +266,7 @@ export default function Home() {
                             onOpenTeam={(t, r, person) => { if (person) { enter(t); selectPerson(person); } else { setSelectedTeam(t); setSelectedRole(r); setPanel("team"); } }} />
             </SidePanel>
           )}
-          {panel === "connectors" && <SidePanel title="Connectors" onClose={() => setPanel(null)}><ConnectorsPanel onError={(m) => toast(m, "bad")} /></SidePanel>}
+          {panel === "connectors" && <SidePanel title="Connectors" onClose={() => setPanel(null)}><ConnectorsPanel onError={(m) => toast(m, "bad")} onToast={(m) => { toast(m, "ok"); refreshStatus(); }} /></SidePanel>}
           {panel === "activity" && <SidePanel title="Activity" onClose={() => setPanel(null)}><Activity outbox={outbox} events={events} /></SidePanel>}
 
           <div className="bottom">
@@ -296,6 +305,7 @@ export default function Home() {
         <OrgGraph org={org} version={graphVersion} onClose={() => setShowGraph(false)}
                   onVisit={(t, person) => { setShowGraph(false); enter(t); selectPerson(person); }} />
       )}
+      {unlock && <Unlock onClose={() => setUnlock(false)} onDone={() => { setUnlock(false); toast("🔓 Unlocked", "ok"); refresh(); }} />}
       <Toasts toasts={toasts} />
     </main>
   );

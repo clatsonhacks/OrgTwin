@@ -473,7 +473,7 @@ async def test(key: str, url: str = "") -> dict:
         return {"ok": n > 0, "mode": res["mode"],
                 "message": f"Search works ({res['mode']}): {n} result(s)." if n else "Search returned nothing."}
     if c.mode() == "mock":
-        return {"ok": True, "mode": "mock", "message": f"Demo mode — set {', '.join(c.env)} to go live. Nothing was sent."}
+        return {"ok": True, "mode": "mock", "message": "Demo mode — click Connect to go live. Nothing was sent."}
     if key in ("discord", "teams", "telegram"):
         await c.handler(next(iter(c.actions)), {"text": msg})
         return {"ok": True, "mode": "live", "message": "Test message sent."}

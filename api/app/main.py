@@ -2,13 +2,15 @@
 import asyncio
 from contextlib import asynccontextmanager
 
+import httpx
+
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import desc, func, select
 
-from . import a2a, engine, graph, llm, orggen, skills, workflows
+from . import a2a, engine, graph, llm, oauth, orggen, skills, userconfig, workflows
 from .config import settings
 from .connectors import email, registry, sheets, slack
 from .db import Approval, Event, Org, Run, SessionLocal, Workflow, init_db
@@ -17,6 +19,7 @@ from .events import bus, sse_format
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     init_db()
+    userconfig.load()
     yield
 
 
@@ -63,6 +66,12 @@ async def status():
     return {"modes": {**modes, "vision": vision or "none"},
             "demo_mode": any(v == "mock" for k, v in modes.items() if k != "runner"),
             "auth_required": bool(settings.app_access_token)}
+
+
+@app.get("/api/auth/check", dependencies=[Depends(require_token)])
+def auth_check():
+    """200 when the X-Access-Token is right (or none is needed); used by the unlock popup."""
+    return {"ok": True}
 
 
 # ---------- org ----------
@@ -489,13 +498,20 @@ def list_connectors():
     """Every connector, whether it is live or in demo mode, what it needs, and the actions it offers."""
     core = [
         {"key": "sheets", "name": "Google Sheets", "icon": "📊", "category": "data", "mode": "live" if sheets.mode() != "mock" else "mock",
-         "env": ["GOOGLE_SERVICE_ACCOUNT_JSON", "GOOGLE_SHEET_ID"], "setup": "Share the sheet with the service account email.", "actions": [], "core": True},
-        {"key": "email", "name": "Email (SMTP)", "icon": "✉️", "category": "chat", "mode": "live" if email.mode() != "mock" else "mock",
-         "env": ["SMTP_HOST", "SMTP_FROM", "SMTP_USER", "SMTP_PASSWORD"], "setup": "Gmail: smtp.gmail.com + an app password.", "actions": [], "core": True},
+         "env": ["GOOGLE_SERVICE_ACCOUNT_JSON", "GOOGLE_SHEET_ID"], "setup": "Sign in with Google and pick a sheet.", "actions": [], "core": True},
+        {"key": "email", "name": "Email (Gmail / SMTP)", "icon": "✉️", "category": "chat", "mode": "live" if email.mode() != "mock" else "mock",
+         "env": ["SMTP_HOST", "SMTP_FROM", "SMTP_USER", "SMTP_PASSWORD"], "setup": "Sign in with Google to send from your Gmail, or use any SMTP server.", "actions": [], "core": True},
         {"key": "slack", "name": "Slack", "icon": "💬", "category": "chat", "mode": "live" if slack.mode() != "mock" else "mock",
          "env": ["SLACK_WEBHOOK_URL"], "setup": "Create an incoming webhook for a channel.", "actions": [], "core": True},
     ]
-    return core + registry.catalog()
+    out = core + registry.catalog()
+    for c in out:
+        c["connectable"] = c["key"] in userconfig.CONNECTOR_SETUP
+        if c["connectable"]:
+            st = _connection(c["key"])
+            c["signin"], c["account"] = st["signin"], st["account"]
+            c["connected_in_app"] = st.get("connected_in_app") or bool(st["account"])
+    return out
 
 
 class ConnectorTestIn(BaseModel):
@@ -514,6 +530,122 @@ async def test_connector(key: str, body: ConnectorTestIn | None = None):
         return {"ok": False, "mode": registry.CONNECTORS[key].mode(), "message": f"{type(e).__name__}: {e}"[:300]}
     bus.emit("connector.tested", {"connector": key, **out})
     return out
+
+
+# ---------- connect connectors from the app (sign-in popups + short forms) ----------
+def _connection(key: str) -> dict:
+    """What the Connect popup needs for one connector: how to connect and what is connected now."""
+    form = userconfig.connector_form(key) or {"fields": [], "steps": [], "link": "", "link_label": ""}
+    oa, avail = userconfig.oauth_state(), oauth.available()
+    signin = {"sheets": "google", "email": "google", "stripe": "stripe"}.get(key, "")
+    account = ""
+    if signin == "google" and settings.google_signed_in():
+        account = settings.google_account or "Google account"
+    if signin == "stripe" and "stripe" in oa:
+        account = settings.stripe_account or "Stripe account"
+    return {**form, "signin": signin, "signin_available": bool(signin and avail.get(signin)),
+            "account": account, "needs_sheet": key == "sheets" and bool(account) and not settings.sheet_id,
+            "sheet_id": settings.sheet_id if key == "sheets" else ""}
+
+
+@app.get("/api/setup/connectors/{key}")
+def connector_setup(key: str):
+    if key not in userconfig.CONNECTOR_SETUP:
+        raise HTTPException(404, "unknown connector")
+    return _connection(key)
+
+
+class ConnectorValuesIn(BaseModel):
+    values: dict[str, str | bool] = Field(default_factory=dict)
+
+
+async def _test_after_save(key: str) -> dict:
+    try:
+        if key == "sheets":
+            if sheets.mode() == "mock":
+                return {"ok": False, "message": "Saved — add a sheet to finish."}
+            cols = await sheets.columns()
+            return {"ok": True, "message": f"Connected — columns: {', '.join(cols[:8]) or '(empty sheet)'}"}
+        if key == "email":
+            if email.mode() == "mock":
+                return {"ok": False, "message": "Saved — not complete yet."}
+            return {"ok": True, "message": f"Email is live ({email.mode()})."}
+        if key == "slack":
+            if slack.mode() == "mock":
+                return {"ok": False, "message": "Saved — not complete yet."}
+            await slack.post("✅ OrgTwin is connected — agents can post here now.")
+            return {"ok": True, "message": "Test message sent to Slack."}
+        if key in registry.CONNECTORS and key != "webhook":
+            return await registry.test(key)
+        return {"ok": True, "message": "Saved."}
+    except Exception as e:
+        return {"ok": False, "message": f"Saved, but the check failed: {type(e).__name__}: {e}"[:300]}
+
+
+@app.put("/api/setup/connectors/{key}", dependencies=[Depends(require_token)])
+async def save_connector(key: str, body: ConnectorValuesIn):
+    """Save what the user typed in the Connect popup, then check the connection."""
+    if key not in userconfig.CONNECTOR_SETUP:
+        raise HTTPException(404, "unknown connector")
+    allowed = {f.env for f in userconfig.CONNECTOR_SETUP[key].fields}
+    vals = {k: v for k, v in body.values.items() if k in allowed}
+    if any(isinstance(v, str) and len(v) > 20_000 for v in vals.values()):
+        raise HTTPException(400, "value too long")
+    userconfig.save_connector(key, vals)
+    result = await _test_after_save(key)
+    bus.emit("connector.tested", {"connector": key, **result})
+    return {**result, "setup": _connection(key)}
+
+
+@app.delete("/api/setup/connectors/{key}", dependencies=[Depends(require_token)])
+async def disconnect_connector(key: str):
+    """Forget the connector's saved values; for Google/Stripe also sign out (revokes the app's access)."""
+    if key not in userconfig.CONNECTOR_SETUP:
+        raise HTTPException(404, "unknown connector")
+    userconfig.clear_connector(key)
+    signin = {"sheets": "google", "email": "google", "stripe": "stripe"}.get(key)
+    if signin:
+        await oauth.disconnect(signin)
+    return {"ok": True, "setup": _connection(key)}
+
+
+@app.post("/api/oauth/{provider}/start", dependencies=[Depends(require_token)])
+def oauth_start(provider: str):
+    """The URL the Connect popup opens: the provider's own sign-in and "Allow access" screen."""
+    try:
+        return {"url": oauth.start(provider)}
+    except oauth.OAuthError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/oauth/{provider}/callback", response_class=HTMLResponse)
+async def oauth_callback(provider: str, code: str = "", state: str = "", error: str = "", error_description: str = ""):
+    """The provider sends the popup back here; we finish the sign-in and the popup closes itself."""
+    if error:
+        msg = "Access was not allowed." if error == "access_denied" else f"Sign-in failed: {error_description or error}"
+        return oauth.popup_page(provider, False, msg[:200])
+    try:
+        msg = await oauth.finish(provider, code, state)
+    except oauth.OAuthError as e:
+        return oauth.popup_page(provider, False, str(e))
+    except httpx.HTTPError:
+        return oauth.popup_page(provider, False, "Could not reach the provider — try again.")
+    bus.emit("connector.connected", {"provider": provider})
+    return oauth.popup_page(provider, True, msg)
+
+
+@app.post("/api/oauth/google/sample-sheet", dependencies=[Depends(require_token)])
+async def google_sample_sheet():
+    """Create a ready-made CRM sheet with sample leads in the signed-in user's Google Drive and use it."""
+    if not settings.google_signed_in():
+        raise HTTPException(400, "connect Google first")
+    try:
+        sid = await oauth.create_sample_sheet(sheets._MOCK_LEADS, sheets.COLUMNS)
+    except RuntimeError as e:
+        raise HTTPException(400, str(e))
+    userconfig.save_connector("sheets", {"GOOGLE_SHEET_ID": sid})
+    return {"ok": True, "sheet_id": sid, "url": f"https://docs.google.com/spreadsheets/d/{sid}/edit",
+            "setup": _connection("sheets")}
 
 
 @app.get("/api/audit")
