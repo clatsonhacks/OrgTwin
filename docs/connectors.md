@@ -7,13 +7,20 @@ it is connected. In demo mode it records what it *would* have sent, which shows 
 
 Open **🔌 Connectors** (or click **Demo mode** in the top bar) and press **Connect** on any connector.
 
-- **Google Sheets + Gmail** and **Stripe** open a sign-in popup from Google or Stripe. The user signs in and
-  clicks **Allow**, and the popup closes itself. One Google sign-in covers both Sheets and email: emails go out
+- **Google Sheets + Gmail, Stripe, Notion, Slack, Discord and HubSpot** open that service's own sign-in popup.
+  The user signs in and clicks **Allow**; Slack and Discord show a channel picker on that same screen, and
+  Notion lets the user tick the pages to share. After Notion, the user picks a database (or OrgTwin creates
+  an "OrgTwin" database inside a shared page). HubSpot's short-lived token is refreshed automatically.
+- **Telegram** has no sign-in popup. **Add to a Telegram group** opens OrgTwin's bot with a one-time code; the
+  user picks a group (or a direct chat) and presses **Start**, and the app notices by itself.
+- The popup closes itself when done. One Google sign-in covers both Sheets and email: emails go out
   from the user's own Gmail. After signing in, Sheets asks which sheet to use. The user can paste a link, or
   click **Create a sample CRM sheet for me** and OrgTwin makes one with the right columns and 5 sample leads.
-- Other connectors (Slack, Discord, Teams, Telegram, Notion, HubSpot, web search, webhooks) open a short form.
+- Microsoft Teams, web search and webhooks (and any of the above until the admin enables its sign-in) open a
+  short form.
   It explains where to get the value, has a button that opens that page, and runs a connection check on save.
-- **Disconnect** forgets the saved values. For Google and Stripe it also revokes OrgTwin's access.
+- **Disconnect** forgets the saved values. For Google, Stripe, Notion and HubSpot it also revokes OrgTwin's
+  access, and for Discord it deletes the webhook.
 
 What users connect is stored in the API's database (`app_settings` table) and applies right away, with no
 restart. Saved secrets are never sent back to the browser; the form only shows `••••` and the last 4 characters.
@@ -22,8 +29,9 @@ still work, and anything connected in the app takes priority over them.
 
 ### One-click sign-in: the admin's one-time setup
 
-The popups need OrgTwin registered once as an OAuth app. Until that is done, the Connect popup for these three
-falls back to the form (service-account JSON / SMTP / `sk_test_` key) and says what is missing.
+The popups need OrgTwin registered once as an OAuth app with each service. Until that is done, the Connect popup
+falls back to the form (service-account JSON / SMTP / `sk_test_` key / token) and names the missing setting.
+Every redirect URI has the form `<PUBLIC_API_URL>/api/oauth/<service>/callback`.
 
 **Google** (Sheets + Gmail)
 1. Google Cloud console → create a project → enable **Google Sheets API** and **Gmail API**.
@@ -40,6 +48,27 @@ falls back to the form (service-account JSON / SMTP / `sk_test_` key) and says w
 2. Add the redirect URI `<PUBLIC_API_URL>/api/oauth/stripe/callback`.
 3. Put the `ca_…` client ID in `STRIPE_CONNECT_CLIENT_ID` and the platform's `sk_test_…` key in
    `STRIPE_CONNECT_SECRET_KEY`. Connections that come back in live mode are refused.
+
+**Notion**: notion.so/profile/integrations → *New integration* → type **Public**. Add the redirect URI,
+then put the OAuth client ID/secret in `NOTION_OAUTH_CLIENT_ID` / `NOTION_OAUTH_CLIENT_SECRET`.
+
+**Slack**: api.slack.com/apps → *Create New App* → *OAuth & Permissions*: add the bot scope `incoming-webhook`
+and the redirect URL. Set *Manage Distribution* to public if people outside your workspace will connect. The
+client ID/secret (*Basic Information*) go in `SLACK_CLIENT_ID` / `SLACK_CLIENT_SECRET`.
+
+**Discord**: discord.com/developers/applications → *New Application* → *OAuth2*: add the redirect. The client
+ID/secret go in `DISCORD_CLIENT_ID` / `DISCORD_CLIENT_SECRET`. OrgTwin asks for `webhook.incoming` only.
+
+**HubSpot**: developers.hubspot.com → *Apps* → *Create app* → *Auth*: scopes `crm.objects.contacts.read` and
+`crm.objects.contacts.write`, plus the redirect URL. The client ID/secret go in `HUBSPOT_CLIENT_ID` /
+`HUBSPOT_CLIENT_SECRET`.
+
+**Telegram**: create OrgTwin's bot with @BotFather and set `TELEGRAM_BOT_TOKEN`. That's all; users choose
+the chat themselves. OrgTwin reads the bot's updates (`getUpdates`) to spot the Start message, so don't also
+point a webhook at the same bot.
+
+**Microsoft Teams** stays a pasted Workflows webhook URL. Posting through Microsoft's sign-in needs a Graph
+app with admin consent in each tenant, so it is not a one-click flow.
 
 `PUBLIC_API_URL` defaults to `PUBLIC_APP_URL`, which is right when Caddy serves `/api` on the same origin.
 Google only accepts `https://` redirect URIs (or `http://localhost`), so a public deployment needs a domain
@@ -80,8 +109,11 @@ from that one spec.
   and, once connected, the `account` it is connected to.
 - `GET /api/setup/connectors/{key}`: what the Connect popup shows (sign-in available?, form fields with masked
   values, steps). `PUT` saves form values and runs the check; `DELETE` disconnects.
-- `POST /api/oauth/{google|stripe}/start` → `{url}` for the popup; the provider redirects back to
+- `POST /api/oauth/{google|stripe|notion|slack|discord|hubspot}/start` → `{url}` for the popup; the provider redirects back to
   `GET /api/oauth/{provider}/callback`. `POST /api/oauth/google/sample-sheet` creates and selects a sample sheet.
+  `GET /api/oauth/notion/databases` lists what the user shared; `POST /api/oauth/notion/database`
+  picks one (`database_id`) or creates one (`create_in_page`).
+- `POST /api/connect/telegram/start` → `{url, dm_url, code}`; poll `GET /api/connect/telegram/check?code=…`.
 - `POST /api/connectors/{key}/test` (with `{"url": …}` for webhook) checks the connection. Chat connectors send a
   short test message; Notion, HubSpot and Stripe make a read-only call. In demo mode nothing is sent.
 

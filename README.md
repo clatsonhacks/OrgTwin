@@ -139,10 +139,11 @@ import, and sandbox containment: no network, read-only, no secrets, timeout kill
 
 ### Keys (`.env`, never committed)
 
-Users connect Google Sheets, Gmail and Stripe from the app (**🔌 Connectors → Connect**, then sign in and click
-Allow). To turn on those sign-in popups, the admin registers OrgTwin as an OAuth app once:
-`GOOGLE_OAUTH_CLIENT_ID/SECRET` and `STRIPE_CONNECT_CLIENT_ID/SECRET_KEY`. The steps are in
-[docs/connectors.md](docs/connectors.md#one-click-sign-in-the-admins-one-time-setup). The other connectors open a
+Users connect Google Sheets, Gmail, Stripe, Notion, Slack, Discord and HubSpot from the app (**🔌 Connectors →
+Connect**, then sign in and click Allow), and Telegram by pressing Start on OrgTwin's bot. To turn on those
+popups, the admin registers OrgTwin once with each service (`GOOGLE_OAUTH_*`, `STRIPE_CONNECT_*`,
+`NOTION_OAUTH_*`, `SLACK_CLIENT_*`, `DISCORD_CLIENT_*`, `HUBSPOT_CLIENT_*`, `TELEGRAM_BOT_TOKEN`). The steps are in
+[docs/connectors.md](docs/connectors.md#one-click-sign-in-the-admins-one-time-setup). Teams, webhooks and web search open a
 short form in the app. Everything in the table below can still be set in `.env` instead.
 
 | Variable | Where to get it |

@@ -2,13 +2,26 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { api, del, post, put } from "@/lib/api";
-import { loadConnectors, useConnectors, type Connector, type ConnectorSetup, type SetupField } from "@/lib/connectors";
-import { connectWithPopup, openHelp } from "@/lib/oauth";
+import { loadConnectors, useConnectors, type Connector, type ConnectorSetup, type SetupField, type SignIn } from "@/lib/connectors";
+import { connectTelegram, connectWithPopup, openHelp } from "@/lib/oauth";
 
 const CATEGORY: Record<string, string> = {
   data: "Data", chat: "Messaging", docs: "Docs", crm: "CRM", billing: "Billing", developer: "Developer", research: "Research",
 };
-const SIGNIN_NAME = { google: "Google", stripe: "Stripe" } as const;
+const SIGNIN_NAME: Record<SignIn, string> = {
+  google: "Google", stripe: "Stripe", notion: "Notion", slack: "Slack", discord: "Discord", hubspot: "HubSpot", telegram: "Telegram",
+};
+/** What the user is allowing, in plain words (shown before they sign in). */
+const PERMS: Record<string, string[]> = {
+  sheets: ["📊 Read and update the Google Sheet you choose", "✉️ Send emails from your Gmail (after you approve each batch)"],
+  email: ["✉️ Send emails from your Gmail (after you approve each batch)", "📊 Also connects Google Sheets"],
+  stripe: ["🧾 Create and send invoices in your Stripe account (test mode only)"],
+  notion: ["📝 Add pages to the database you pick", "👀 Only the pages you share on the next screen"],
+  slack: ["💬 Post messages in the channel you pick on the next screen"],
+  discord: ["🎮 Post messages in the server channel you pick on the next screen"],
+  hubspot: ["🧲 Create and update contacts in your HubSpot CRM"],
+  telegram: ["✈️ The OrgTwin bot posts in the chat or group where you press Start"],
+};
 
 /** Every connector: one Connect button each. Google and Stripe open a sign-in popup; the rest a short form. */
 export default function ConnectorsPanel({ onError, onToast }: { onError: (m: string) => void; onToast?: (m: string) => void }) {
@@ -104,6 +117,8 @@ function ConnectDialog({ c, onClose, onError, onToast }: {
   const [busy, setBusy] = useState<"" | "signin" | "save" | "sheet" | "off">("");
   const [msg, setMsg] = useState<{ ok: boolean; message: string } | null>(null);
   const [sheetLink, setSheetLink] = useState("");
+  const [tg] = useState({ cancelled: false });
+  useEffect(() => () => { tg.cancelled = true; }, [tg]);
 
   const reload = async () => {
     const s = await api<ConnectorSetup>(`/api/setup/connectors/${c.key}`);
@@ -127,6 +142,15 @@ function ConnectDialog({ c, onClose, onError, onToast }: {
     if (r.message) setMsg(r);
     if (s?.account) { loadConnectors(true).catch(() => {}); if (!s.needs_sheet) onToast?.(`🔌 ${c.name} connected`); }
   };
+  const telegram = async (where: "group" | "dm") => {
+    tg.cancelled = false;
+    setBusy("signin"); setMsg(null);
+    const r = await connectTelegram(where, tg);
+    await reload().catch(() => null);
+    setBusy("");
+    if (r.message) setMsg(r);
+    if (r.ok) { loadConnectors(true).catch(() => {}); onToast?.(`🔌 ${c.name} connected`); }
+  };
   const save = async (values: Record<string, string | boolean>) => {
     setBusy("save"); setMsg(null);
     try {
@@ -145,7 +169,9 @@ function ConnectDialog({ c, onClose, onError, onToast }: {
     } catch (e: any) { setMsg({ ok: false, message: e.message }); } finally { setBusy(""); }
   };
   const disconnect = async () => {
-    if (!window.confirm(`Disconnect ${c.name}? Agents go back to demo mode for it.`)) return;
+    const google = st?.signin === "google" && st.account;
+    if (!window.confirm(google ? `Disconnect Google (${st!.account})? Both Google Sheets and Gmail go back to demo mode.`
+                               : `Disconnect ${c.name}? Agents go back to demo mode for it.`)) return;
     setBusy("off"); setMsg(null);
     try {
       const r = await del<{ setup: ConnectorSetup }>(`/api/setup/connectors/${c.key}`);
@@ -175,17 +201,31 @@ function ConnectDialog({ c, onClose, onError, onToast }: {
 
           {st && showSignin && !signedIn && (
             <>
-              <p className="lead">Sign in with your {who} account and click <b>Allow</b>. That&apos;s it — no keys to copy.</p>
+              <p className="lead">{st.signin === "telegram"
+                ? <>Tap the button, pick a chat in Telegram and press <b>Start</b>. That&apos;s it — no keys to copy.</>
+                : <>Sign in with your {who} account and click <b>Allow</b>. That&apos;s it — no keys to copy.</>}</p>
               <ul className="perm-list">
-                {c.key === "sheets" && <li>📊 Read and update the Google Sheet you choose</li>}
-                {(c.key === "sheets" || c.key === "email") && <li>✉️ Send emails from your Gmail (after you approve each batch)</li>}
-                {c.key === "stripe" && <li>🧾 Create and send invoices in your Stripe account (test mode only)</li>}
+                {(PERMS[c.key] ?? []).map((p) => <li key={p}>{p}</li>)}
                 <li>🔒 You can disconnect any time</li>
               </ul>
-              <button className={`btn btn-big signin-btn signin-${st.signin}`} disabled={busy === "signin"} onClick={signin}>
-                {busy === "signin" ? "Waiting for the sign-in window…" : st.signin === "google" ? <><GoogleMark /> Sign in with Google</> : <>Connect with Stripe</>}
-              </button>
-              {busy === "signin" && <p className="muted center-text">Finish in the popup. Nothing opened? Allow popups for this site and click again.</p>}
+              {st.signin === "telegram" ? (
+                busy === "signin" ? (
+                  <>
+                    <p className="muted center-text">In Telegram, pick the chat and press <b>Start</b>. This window updates by itself…</p>
+                    <button className="btn" onClick={() => { tg.cancelled = true; }}>Cancel</button>
+                  </>
+                ) : (
+                  <div className="row tg-row">
+                    <button className="btn btn-big signin-btn signin-telegram" onClick={() => telegram("group")}>Add to a Telegram group</button>
+                    <button className="btn signin-btn" onClick={() => telegram("dm")}>…or message me directly</button>
+                  </div>
+                )
+              ) : (
+                <button className={`btn btn-big signin-btn signin-${st.signin}`} disabled={busy === "signin"} onClick={signin}>
+                  {busy === "signin" ? "Waiting for the sign-in window…" : st.signin === "google" ? <><GoogleMark /> Sign in with Google</> : <>Connect with {who}</>}
+                </button>
+              )}
+              {busy === "signin" && st.signin !== "telegram" && <p className="muted center-text">Finish in the popup. Nothing opened? Allow popups for this site and click again.</p>}
               {st.fields.length > 0 && <button className="linkbtn" onClick={() => setManual(true)}>Use a key or password instead</button>}
             </>
           )}
@@ -193,9 +233,8 @@ function ConnectDialog({ c, onClose, onError, onToast }: {
           {st && st.signin && !st.signin_available && !signedIn && !manual && (
             <>
               <p className="lead">Fill in the details below to connect.</p>
-              <p className="muted">One-click {who} sign-in isn&apos;t turned on for this server yet. The admin can enable it once
-                (<code>{st.signin === "google" ? "GOOGLE_OAUTH_CLIENT_ID" : "STRIPE_CONNECT_CLIENT_ID"}</code> in <code>.env</code>), and then
-                everyone just clicks “Sign in with {who}”.</p>
+              <p className="muted">One-click {who} connect isn&apos;t turned on for this server yet. The admin can enable it once
+                (<code>{st.signin_env}</code> in <code>.env</code>), and then everyone just clicks Connect and allows access.</p>
             </>
           )}
 
@@ -203,7 +242,8 @@ function ConnectDialog({ c, onClose, onError, onToast }: {
             <div className="account-box">
               <span className="ok-dot" aria-hidden>✓</span>
               <div className="grow"><b>Connected</b><span className="muted">{st.account}</span></div>
-              <button className="btn btn-sm" onClick={signin} disabled={!!busy || !st.signin_available}>Switch account</button>
+              <button className="btn btn-sm" onClick={() => (st.signin === "telegram" ? telegram("group") : signin())}
+                      disabled={!!busy || !st.signin_available}>{st.signin === "telegram" ? "Change chat" : "Switch account"}</button>
             </div>
           )}
 
@@ -227,6 +267,11 @@ function ConnectDialog({ c, onClose, onError, onToast }: {
             </div>
           )}
 
+          {st && c.key === "notion" && signedIn && (
+            <NotionPicker st={st} busy={!!busy} onPicked={(r) => { setSt(r.setup); setMsg(r); loadConnectors(true).catch(() => {}); if (r.ok) onToast?.("📝 Notion connected"); }}
+                          onError={(m) => setMsg({ ok: false, message: m })} />
+          )}
+
           {st && (manual || !st.signin || !st.signin_available) && !(signedIn && st.signin) && st.fields.length > 0 && (
             <ManualForm st={st} vals={vals} setVals={setVals} busy={busy === "save"} onSave={() => save(vals)}
                         onBack={st.signin && st.signin_available ? () => setManual(false) : undefined} />
@@ -245,6 +290,50 @@ function ConnectDialog({ c, onClose, onError, onToast }: {
       </div>
     </div>,
     document.body,
+  );
+}
+
+function NotionPicker({ st, busy, onPicked, onError }: {
+  st: ConnectorSetup; busy: boolean; onError: (m: string) => void;
+  onPicked: (r: { ok: boolean; message: string; setup: ConnectorSetup }) => void;
+}) {
+  const [data, setData] = useState<{ databases: { id: string; title: string; url: string }[]; pages: { id: string; title: string }[] } | null>(null);
+  const [working, setWorking] = useState(false);
+  const load = () => api<typeof data>("/api/oauth/notion/databases").then(setData).catch((e) => onError(e.message));
+  useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const pick = async (body: { database_id?: string; create_in_page?: string }) => {
+    setWorking(true);
+    try { onPicked(await post("/api/oauth/notion/database", body)); } catch (e: any) { onError(e.message); } finally { setWorking(false); }
+  };
+  const cur = data?.databases.find((d) => d.id.replace(/-/g, "") === st.database_id.replace(/-/g, ""));
+  return (
+    <div className="sheet-pick">
+      <h3>{st.database_id ? "Agents write to" : "Pick a database"}</h3>
+      {!data && <p className="muted">Loading what you shared…</p>}
+      {data && data.databases.length > 0 && (
+        <div className="pick-list">
+          {data.databases.map((d) => (
+            <button key={d.id} className={`pick ${cur?.id === d.id ? "on" : ""}`} disabled={busy || working} onClick={() => pick({ database_id: d.id })}>
+              🗂 {d.title}{cur?.id === d.id && " ✓"}
+            </button>
+          ))}
+        </div>
+      )}
+      {data && data.pages.length > 0 && (
+        <>
+          <p className="muted or">or create a new “OrgTwin” database inside a page</p>
+          <div className="pick-list">
+            {data.pages.slice(0, 8).map((p) => (
+              <button key={p.id} className="pick" disabled={busy || working} onClick={() => pick({ create_in_page: p.id })}>＋ in “{p.title}”</button>
+            ))}
+          </div>
+        </>
+      )}
+      {data && !data.databases.length && !data.pages.length && (
+        <p className="muted">Nothing was shared with OrgTwin. Click <b>Switch account</b> and tick a page or database on Notion&apos;s screen.</p>
+      )}
+      {data && <button className="linkbtn" onClick={load}>↻ Refresh list</button>}
+    </div>
   );
 }
 

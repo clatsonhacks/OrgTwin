@@ -41,6 +41,14 @@ class Settings:
     google_oauth_client_secret = _env("GOOGLE_OAUTH_CLIENT_SECRET")
     stripe_connect_client_id = _env("STRIPE_CONNECT_CLIENT_ID")        # ca_… (Connect settings, test mode)
     stripe_connect_secret_key = _env("STRIPE_CONNECT_SECRET_KEY")      # the platform's sk_test_… key
+    notion_oauth_client_id = _env("NOTION_OAUTH_CLIENT_ID")            # Notion public integration
+    notion_oauth_client_secret = _env("NOTION_OAUTH_CLIENT_SECRET")
+    slack_client_id = _env("SLACK_CLIENT_ID")                          # Slack app with incoming-webhook scope
+    slack_client_secret = _env("SLACK_CLIENT_SECRET")
+    discord_client_id = _env("DISCORD_CLIENT_ID")                      # Discord application (webhook.incoming)
+    discord_client_secret = _env("DISCORD_CLIENT_SECRET")
+    hubspot_client_id = _env("HUBSPOT_CLIENT_ID")                      # HubSpot public app
+    hubspot_client_secret = _env("HUBSPOT_CLIENT_SECRET")
     # Filled in from the app when a user signs in (see userconfig.py), never from .env
     google_refresh_token = ""
     google_account = ""

@@ -7,16 +7,18 @@ export type ConnectorAction = { key: string; label: string; doc: string; externa
 export type Connector = {
   key: string; name: string; icon: string; category: string; mode: "live" | "mock" | string;
   env: string[]; setup: string; actions: ConnectorAction[]; core?: boolean;
-  connectable?: boolean; signin?: "google" | "stripe" | ""; account?: string; connected_in_app?: boolean;
+  connectable?: boolean; signin?: SignIn | ""; account?: string; connected_in_app?: boolean;
 };
 
+export type SignIn = "google" | "stripe" | "notion" | "slack" | "discord" | "hubspot" | "telegram";
 export type SetupField = {
   env: string; label: string; type: "text" | "secret" | "textarea" | "toggle" | "number"; placeholder: string;
   optional: boolean; set: boolean; value: string | boolean; hint: string; source: "app" | "env" | "";
 };
 export type ConnectorSetup = {
   fields: SetupField[]; steps: string[]; link: string; link_label: string; connected_in_app?: boolean;
-  signin: "google" | "stripe" | ""; signin_available: boolean; account: string; needs_sheet: boolean; sheet_id: string;
+  signin: SignIn | ""; signin_available: boolean; signin_env: string; account: string;
+  needs_sheet: boolean; sheet_id: string; needs_database: boolean; database_id: string;
 };
 
 // One fetch shared by every component (step editor, connectors panel).

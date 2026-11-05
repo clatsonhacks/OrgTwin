@@ -517,3 +517,12 @@ button.mode-demo:not(:disabled):hover small { color: var(--ink); text-decoration
 .sheet-pick .btn-wide { white-space: normal; }
 .sheet-pick .row { flex-wrap: nowrap; }
 .sheet-pick .row input { min-width: 0; flex: 1; }
+.pick-list { display: grid; gap: 6px; }
+.pick { text-align: left; background: #fff; border: 2px solid #d9cdb2; border-radius: 8px; padding: 8px 10px; cursor: pointer; font-size: 14px; }
+.pick:hover:not(:disabled) { border-color: var(--ink); }
+.pick.on { border-color: var(--grass); background: #eef9e8; font-weight: 600; }
+.signin-notion { background: #fff; } .signin-slack { background: #4a154b; color: #fff; }
+.signin-discord { background: #5865f2; color: #fff; } .signin-hubspot { background: #ff7a59; color: #fff; }
+.signin-telegram { background: #229ed9; color: #fff; }
+.tg-row { flex-direction: column; align-items: stretch; margin-top: 0; }
+.tg-row .btn-big { margin-top: 4px; }

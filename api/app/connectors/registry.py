@@ -198,7 +198,8 @@ async def _hubspot(action: str, p: dict) -> dict:
                                "company": p.get("company", ""), "lifecyclestage": p.get("lifecyclestage", "")}.items() if v}
     if not settings.hubspot_token:
         return _record("hubspot", action, "mock", f"upsert contact {email}", {"properties": props})
-    h = {"Authorization": f"Bearer {settings.hubspot_token}"}
+    from ..oauth import hubspot_token
+    h = {"Authorization": f"Bearer {await hubspot_token()}"}
     base = "https://api.hubapi.com/crm/v3/objects/contacts"
     r = await _post_json(base, {"properties": props}, h)
     if r.status_code == 409:  # already exists → update by email
@@ -484,9 +485,10 @@ async def test(key: str, url: str = "") -> dict:
         title = "".join(t.get("plain_text", "") for t in r.json().get("title", [])) or "database"
         return {"ok": True, "mode": "live", "message": f"Can write to Notion “{title}”."}
     if key == "hubspot":
+        from ..oauth import hubspot_token
         async with httpx.AsyncClient(timeout=15) as cl:
             r = await cl.get("https://api.hubapi.com/crm/v3/objects/contacts?limit=1",
-                             headers={"Authorization": f"Bearer {settings.hubspot_token}"})
+                             headers={"Authorization": f"Bearer {await hubspot_token()}"})
         _raise(r, "HubSpot")
         return {"ok": True, "mode": "live", "message": "HubSpot token works (contacts readable)."}
     if key == "stripe":

@@ -537,15 +537,18 @@ def _connection(key: str) -> dict:
     """What the Connect popup needs for one connector: how to connect and what is connected now."""
     form = userconfig.connector_form(key) or {"fields": [], "steps": [], "link": "", "link_label": ""}
     oa, avail = userconfig.oauth_state(), oauth.available()
-    signin = {"sheets": "google", "email": "google", "stripe": "stripe"}.get(key, "")
+    signin = oauth.CONNECTOR_SIGNIN.get(key, "")
     account = ""
-    if signin == "google" and settings.google_signed_in():
-        account = settings.google_account or "Google account"
-    if signin == "stripe" and "stripe" in oa:
-        account = settings.stripe_account or "Stripe account"
+    if signin == "google":
+        account = (settings.google_account or "Google account") if settings.google_signed_in() else ""
+    elif signin in oa:
+        account = oa[signin].get("name") or f"{signin.title()} account"
     return {**form, "signin": signin, "signin_available": bool(signin and avail.get(signin)),
+            "signin_env": oauth.missing_env(signin) if signin else "",
             "account": account, "needs_sheet": key == "sheets" and bool(account) and not settings.sheet_id,
-            "sheet_id": settings.sheet_id if key == "sheets" else ""}
+            "sheet_id": settings.sheet_id if key == "sheets" else "",
+            "needs_database": key == "notion" and bool(account) and not settings.notion_database_id,
+            "database_id": settings.notion_database_id if key == "notion" else ""}
 
 
 @app.get("/api/setup/connectors/{key}")
@@ -603,8 +606,8 @@ async def disconnect_connector(key: str):
     if key not in userconfig.CONNECTOR_SETUP:
         raise HTTPException(404, "unknown connector")
     userconfig.clear_connector(key)
-    signin = {"sheets": "google", "email": "google", "stripe": "stripe"}.get(key)
-    if signin:
+    signin = oauth.CONNECTOR_SIGNIN.get(key)
+    if signin in oauth.PROVIDERS or signin == "telegram":
         await oauth.disconnect(signin)
     return {"ok": True, "setup": _connection(key)}
 
@@ -632,6 +635,62 @@ async def oauth_callback(provider: str, code: str = "", state: str = "", error: 
         return oauth.popup_page(provider, False, "Could not reach the provider — try again.")
     bus.emit("connector.connected", {"provider": provider})
     return oauth.popup_page(provider, True, msg)
+
+
+@app.get("/api/oauth/notion/databases", dependencies=[Depends(require_token)])
+async def notion_databases():
+    """Databases and pages the user shared with OrgTwin while signing in to Notion."""
+    if "notion" not in userconfig.oauth_state():
+        raise HTTPException(400, "connect Notion first")
+    try:
+        return {"databases": await oauth.notion_databases(), "pages": await oauth.notion_pages()}
+    except RuntimeError as e:
+        raise HTTPException(400, str(e))
+
+
+class NotionPickIn(BaseModel):
+    database_id: str = Field(default="", max_length=100)
+    create_in_page: str = Field(default="", max_length=100)
+
+
+@app.post("/api/oauth/notion/database", dependencies=[Depends(require_token)])
+async def notion_pick_database(body: NotionPickIn):
+    """Use one of the shared databases, or create an "OrgTwin" database inside a shared page."""
+    if "notion" not in userconfig.oauth_state():
+        raise HTTPException(400, "connect Notion first")
+    db_id = body.database_id
+    if not db_id and body.create_in_page:
+        try:
+            db_id = (await oauth.notion_create_database(body.create_in_page))["id"]
+        except RuntimeError as e:
+            raise HTTPException(400, str(e))
+    if not db_id:
+        raise HTTPException(400, "pick a database or a page")
+    userconfig.save_connector("notion", {"NOTION_DATABASE_ID": db_id})
+    result = await _test_after_save("notion")
+    return {**result, "setup": _connection("notion")}
+
+
+@app.post("/api/connect/telegram/start", dependencies=[Depends(require_token)])
+async def telegram_start():
+    """A t.me link to OrgTwin's bot carrying a one-time code; the user taps Start and we learn the chat."""
+    try:
+        return await oauth.telegram_start()
+    except oauth.OAuthError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/connect/telegram/check", dependencies=[Depends(require_token)])
+async def telegram_check(code: str):
+    try:
+        out = await oauth.telegram_check(code)
+    except oauth.OAuthError as e:
+        raise HTTPException(400, str(e))
+    except (RuntimeError, httpx.HTTPError) as e:
+        raise HTTPException(502, str(e)[:200])
+    if out["connected"]:
+        bus.emit("connector.connected", {"provider": "telegram"})
+    return {**out, "setup": _connection("telegram")}
 
 
 @app.post("/api/oauth/google/sample-sheet", dependencies=[Depends(require_token)])

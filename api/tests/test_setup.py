@@ -30,12 +30,12 @@ _RealAsyncClient = httpx.AsyncClient
 
 @pytest.fixture(autouse=True)
 def clean(monkeypatch):
-    for p in ("google", "stripe"):
+    for p in ("google", "stripe", "notion", "slack", "discord", "hubspot", "telegram"):
         userconfig.clear_oauth(p)
     for k in userconfig.CONNECTOR_SETUP:
         userconfig.clear_connector(k)
     yield
-    for p in ("google", "stripe"):
+    for p in ("google", "stripe", "notion", "slack", "discord", "hubspot", "telegram"):
         userconfig.clear_oauth(p)
     for k in userconfig.CONNECTOR_SETUP:
         userconfig.clear_connector(k)
@@ -147,3 +147,91 @@ def test_settings_survive_a_restart():
     userconfig.load()
     assert settings.telegram_bot_token == "123:abc"
     asyncio.run(asyncio.sleep(0))
+
+
+def _signin(monkeypatch, provider, routes, id_attr, secret_attr):
+    monkeypatch.setattr(settings, id_attr, "cid")
+    monkeypatch.setattr(settings, secret_attr, "csecret")
+    url = client.post(f"/api/oauth/{provider}/start").json()["url"]
+    q = parse_qs(urlparse(url).query)
+    assert q["client_id"] == ["cid"] and q["redirect_uri"][0].endswith(f"/api/oauth/{provider}/callback")
+    _fake_http(monkeypatch, routes)
+    return q, client.get(f"/api/oauth/{provider}/callback", params={"code": "c", "state": q["state"][0]}).text
+
+
+def test_slack_popup_gives_a_channel_webhook(monkeypatch):
+    q, page = _signin(monkeypatch, "slack", {oauth.SLACK_TOKEN: lambda req: (200, {
+        "ok": True, "team": {"name": "Brightpath"},
+        "incoming_webhook": {"url": "https://hooks.slack.com/services/T/B/x", "channel": "#sales"}})},
+        "slack_client_id", "slack_client_secret")
+    assert q["scope"] == ["incoming-webhook"] and '"ok": true' in page
+    assert settings.slack_webhook_url.endswith("/x") and settings.modes()["slack"] == "webhook"
+    listed = {c["key"]: c for c in client.get("/api/connectors").json()}
+    assert listed["slack"]["account"] == "#sales · Brightpath" and listed["slack"]["mode"] == "live"
+
+
+def test_discord_popup_gives_a_channel_webhook(monkeypatch):
+    q, page = _signin(monkeypatch, "discord", {oauth.DISCORD_TOKEN: lambda req: (200, {
+        "webhook": {"url": "https://discord.com/api/webhooks/1/tok", "name": "OrgTwin", "channel_id": "42"}})},
+        "discord_client_id", "discord_client_secret")
+    assert q["scope"] == ["webhook.incoming"] and '"ok": true' in page
+    assert settings.discord_webhook_url.endswith("/tok")
+
+
+def test_notion_popup_then_pick_a_database(monkeypatch):
+    dbs = [{"object": "database", "id": "db1", "title": [{"plain_text": "Leads"}], "url": "u1"},
+           {"object": "database", "id": "db2", "title": [{"plain_text": "Notes"}], "url": "u2"}]
+
+    def search(req):
+        kind = json.loads(req.content)["filter"]["value"]
+        return 200, {"results": dbs if kind == "database" else []}
+    q, page = _signin(monkeypatch, "notion", {
+        oauth.NOTION_TOKEN: lambda req: (200, {"access_token": "ntn_1", "workspace_name": "Brightpath HQ"}),
+        "https://api.notion.com/v1/search": search,
+        "https://api.notion.com/v1/databases/db2": lambda req: (200, {"title": [{"plain_text": "Notes"}]})},
+        "notion_oauth_client_id", "notion_oauth_client_secret")
+    assert q["owner"] == ["user"] and '"ok": true' in page and "pick the database" in page
+    st = client.get("/api/setup/connectors/notion").json()
+    assert st["account"] == "Brightpath HQ" and st["needs_database"]
+    assert [d["title"] for d in client.get("/api/oauth/notion/databases").json()["databases"]] == ["Leads", "Notes"]
+    r = client.post("/api/oauth/notion/database", json={"database_id": "db2"}).json()
+    assert r["ok"] and "Notes" in r["message"] and settings.notion_database_id == "db2"
+
+
+def test_hubspot_token_refreshes_itself(monkeypatch):
+    calls = []
+
+    def token(req):
+        body = parse_qs(req.content.decode())
+        calls.append(body["grant_type"][0])
+        return 200, {"access_token": f"at{len(calls)}", "refresh_token": "rt", "expires_in": 1800}
+    _, page = _signin(monkeypatch, "hubspot", {
+        oauth.HUBSPOT_TOKEN: token,
+        "https://api.hubapi.com/oauth/v1/access-tokens/": lambda req: (200, {"hub_domain": "brightpath.com"})},
+        "hubspot_client_id", "hubspot_client_secret")
+    assert '"ok": true' in page and "brightpath.com" in page and settings.hubspot_token == "at1"
+    assert asyncio.run(oauth.hubspot_token()) == "at1"           # still fresh
+    st = userconfig.oauth_state()["hubspot"]
+    userconfig.save_oauth("hubspot", {**st, "expires_at": 0})    # expire it
+    assert asyncio.run(oauth.hubspot_token()) == "at2" and calls == ["authorization_code", "refresh_token"]
+
+
+def test_telegram_one_tap_finds_the_chat(monkeypatch):
+    monkeypatch.setattr(settings, "telegram_bot_token", "123:abc")
+    oauth._tg_offset = 0
+    state = {}
+
+    def updates(req):
+        return 200, {"result": [{"update_id": 7, "message": {"text": "hi", "chat": {"id": 1}}},
+                                {"update_id": 8, "message": {"text": f"/start {state['code']}",
+                                                             "chat": {"id": -100, "title": "Sales team"}}}]}
+    _fake_http(monkeypatch, {
+        "https://api.telegram.org/bot123:abc/getMe": lambda req: (200, {"result": {"username": "OrgTwinBot"}}),
+        "https://api.telegram.org/bot123:abc/getUpdates": updates,
+        "https://api.telegram.org/bot123:abc/sendMessage": lambda req: (200, {"ok": True})})
+    st = client.post("/api/connect/telegram/start").json()
+    state["code"] = st["code"]
+    assert st["url"] == f"https://t.me/OrgTwinBot?startgroup={st['code']}"
+    r = client.get("/api/connect/telegram/check", params={"code": st["code"]}).json()
+    assert r["connected"] and r["account"] == "Sales team" and settings.telegram_chat_id == "-100"
+    assert client.get("/api/connect/telegram/check", params={"code": "nope"}).status_code == 400

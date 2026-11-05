@@ -2,8 +2,9 @@
 
 Vultr Serverless Inference (the AI) stays operator-configured in `.env`. Connectors are connected
 by the user: Google (Sheets + Gmail) and Stripe with a sign-in popup that asks them to allow access
-(OAuth, see oauth.py); the rest, or these when the admin has not registered an OAuth app, with a
-short form. Values live in the `app_settings` table and are applied on top of the env-based
+(OAuth, see oauth.py), as are Notion, Slack, Discord and HubSpot; Telegram with a deep link to the
+bot. Teams, webhooks, web search (and any of these when the admin has not registered an OAuth app)
+use a short form. Values live in the `app_settings` table and are applied on top of the env-based
 `settings` object, so code that reads `settings.x` picks them up without a restart. Secrets are
 never returned in full; the API only shows a masked hint.
 """
@@ -179,7 +180,8 @@ def connector_values() -> dict:
     return _get("connectors", None) or {}
 
 
-_OAUTH_ATTRS = ("google_refresh_token", "google_account", "stripe_secret_key", "stripe_account")
+_OAUTH_ATTRS = ("google_refresh_token", "google_account", "stripe_secret_key", "stripe_account", "notion_token",
+                "slack_webhook_url", "discord_webhook_url", "hubspot_token", "telegram_chat_id")
 
 
 def apply_connectors() -> None:
@@ -199,6 +201,16 @@ def apply_connectors() -> None:
     if st := oa.get("stripe"):
         settings.stripe_secret_key = st.get("access_token", "")
         settings.stripe_account = st.get("name") or st.get("account", "")
+    if st := oa.get("notion"):
+        settings.notion_token = st.get("access_token", "")
+    if st := oa.get("slack"):
+        settings.slack_webhook_url = st.get("webhook_url", "")
+    if st := oa.get("discord"):
+        settings.discord_webhook_url = st.get("webhook_url", "")
+    if st := oa.get("hubspot"):
+        settings.hubspot_token = st.get("access_token", "")  # refreshed by oauth.hubspot_token() before use
+    if st := oa.get("telegram"):
+        settings.telegram_chat_id = st.get("chat_id", "")
 
 
 def save_connector(key: str, values: dict) -> None:
