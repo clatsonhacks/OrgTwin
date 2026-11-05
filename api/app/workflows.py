@@ -82,9 +82,13 @@ def normalize_step(s: dict) -> dict:
     elif tool == "slack":
         params = {"text": str(params.get("text") or s.get("description") or s.get("title") or "")}
     per_row = _bool(s.get("per_row")) and not (tool == "sheets" and action == "read_rows")
-    return {"title": str(s.get("title") or action or tool)[:100], "tool": tool, "action": action,
-            "params": params, "per_row": per_row, "needs_approval": _bool(s.get("needs_approval")),
-            "description": str(s.get("description") or "")[:300]}
+    out = {"title": str(s.get("title") or action or tool)[:100], "tool": tool, "action": action,
+           "params": params, "per_row": per_row, "needs_approval": _bool(s.get("needs_approval")),
+           "description": str(s.get("description") or "")[:300]}
+    fs = s.get("from_skill")
+    if isinstance(fs, dict) and isinstance(fs.get("id"), int):
+        out["from_skill"] = {"id": fs["id"], "name": str(fs.get("name") or "")[:120]}
+    return out
 
 
 def normalize(steps) -> list[dict]:
@@ -169,17 +173,95 @@ def plan_from_text(text: str, role_tasks: list[str] | None = None) -> list[dict]
     return normalize(steps)
 
 
-async def generate(team: dict, role: dict, goal: str, columns: list[str]) -> tuple[list[dict], bool]:
+# ---------------- reusing existing skills ----------------
+
+def skill_steps(skill: dict) -> list[dict]:
+    """A recorded skill's steps, copied and tagged with where they came from."""
+    tag = {"id": skill["id"], "name": skill["name"]}
+    return [{**st, "from_skill": tag} for st in normalize(skill.get("steps") or [])]
+
+
+def _sig(st: dict) -> tuple:
+    return (st["tool"], st["action"], st["per_row"])
+
+
+def compose(planned: list[dict], skills: list[dict]) -> list[dict]:
+    """Start from the reused skills' steps, then add only the planned steps they don't already cover."""
+    out: list[dict] = []
+    for sk in skills:
+        out += [st for st in skill_steps(sk) if _sig(st) not in {_sig(x) for x in out}]
+    have = {_sig(x) for x in out}
+    for st in planned:
+        if _sig(st) in have:
+            continue
+        if st["tool"] == "sheets" and st["action"] == "read_rows" and any(x["action"] == "read_rows" for x in out):
+            continue
+        out.append(st)
+        have.add(_sig(st))
+    # rows must be read before any per-row step
+    reads = [x for x in out if x["tool"] == "sheets" and x["action"] == "read_rows"][:1]
+    return (reads + [x for x in out if x not in reads])[:12]
+
+
+def expand_skill_refs(raw, skills: dict[int, dict]) -> tuple[list[dict], list[int]]:
+    """Replace model-emitted {"tool": "skill", "skill_id": N} steps with that skill's steps."""
+    if isinstance(raw, dict):
+        raw = raw.get("steps") or raw.get("workflow") or []
+    out, used = [], []
+    for st in raw or []:
+        if not isinstance(st, dict):
+            continue
+        sid = st.get("skill_id") if str(st.get("tool", "")).lower() == "skill" else None
+        try:
+            sid = int(sid) if sid is not None else None
+        except (TypeError, ValueError):
+            sid = None
+        if sid is not None and sid in skills:
+            out += skill_steps(skills[sid])
+            used.append(sid)
+        elif str(st.get("tool", "")).lower() != "skill":
+            out.append(st)
+    return normalize(out), used
+
+
+async def generate(team: dict, role: dict, goal: str, columns: list[str],
+                   skills: list[dict] | None = None) -> tuple[list[dict], bool, list[int]]:
+    """Design a workflow for a goal. `skills` are relevant existing skills (best first) that may be reused.
+    Returns (steps, mocked, ids of reused skills)."""
+    skills = skills or []
+    by_id = {s["id"]: s for s in skills}
+
+    def offline() -> tuple[list[dict], list[int]]:
+        planned = plan_from_text(goal, role.get("tasks"))
+        if not skills:
+            return planned, []
+        best = skills[:1]  # relevant_skills already ranked and thresholded them
+        return compose(planned, best), [b["id"] for b in best]
+
+    reuse = ""
+    if skills:
+        lines = [f"- skill_id {s['id']}: \"{s['name']}\" — steps: " +
+                 "; ".join(f"{x.get('tool')}/{x.get('action')} {x.get('title')}" for x in s.get("steps") or [])
+                 for s in skills]
+        reuse = ("\nThe company already has these recorded skills. When one covers part of the goal, REUSE it by "
+                 "emitting a single step {\"tool\": \"skill\", \"skill_id\": <id>} in its place instead of "
+                 "re-describing its steps:\n" + "\n".join(lines))
     res = await llm.complete(
         "You design automations for one role in a company, run by AI agents.\n" +
-        SCHEMA_PROMPT.replace("COLUMNS", ", ".join(columns)),
+        SCHEMA_PROMPT.replace("COLUMNS", ", ".join(columns)) + reuse,
         f"Team: {team['name']}\nRole: {role['name']}\nRole tasks: {role.get('tasks')}\nGoal: {goal}",
-        fallback=lambda: json.dumps(plan_from_text(goal, role.get("tasks"))))
+        fallback=lambda: "__offline__")
+    if res.text == "__offline__":
+        steps, used = offline()
+        return steps, True, used
     try:
-        steps = normalize(llm.extract_json(res.text))
+        steps, used = expand_skill_refs(llm.extract_json(res.text), by_id)
     except Exception:
-        steps, res.mocked = plan_from_text(goal, role.get("tasks")), True
-    return steps or plan_from_text(goal, role.get("tasks")), res.mocked
+        steps, used = offline()
+        res.mocked = True
+    if not steps:
+        steps, used = offline()
+    return steps, res.mocked, used
 
 
 def manual_minutes(steps: list[dict], rows: int) -> float:

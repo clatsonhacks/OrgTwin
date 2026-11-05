@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
 import { api, post, put } from "@/lib/api";
-import type { Org, Step, Team, Workflow } from "@/lib/types";
+import type { Org, SkillMatch, Step, Team, Workflow } from "@/lib/types";
 import { ownerOf, peopleOf, type Person } from "@/lib/people";
 import { teamColor } from "@/components/world/layout";
 import StepEditor, { StepList, newStep } from "./StepEditor";
@@ -27,6 +27,20 @@ export default function TeamDrawer({ org, team, index, selectedRole, onSelectRol
   const maxRole = Math.max(1, ...team.roles.map((r) => r.automatable_hours));
 
   useEffect(() => { setGoal(""); }, [selectedRole, selectedPerson]);
+
+  // live preview: which existing skills (from the org knowledge graph) the new workflow will reuse
+  const [matches, setMatches] = useState<SkillMatch[]>([]);
+  useEffect(() => {
+    if (!role || goal.trim().length < 4) { setMatches([]); return; }
+    const q = new URLSearchParams({ team: team.key, role: role.key, goal, ...(person ? { person: person.id } : {}) });
+    const t = setTimeout(() => { api<SkillMatch[]>(`/api/graph/suggest?${q}`).then(setMatches).catch(() => setMatches([])); }, 300);
+    return () => clearTimeout(t);
+  }, [goal, role, person, team.key]);
+  const whoHas = (m: SkillMatch) => {
+    const t = org.teams.find((x) => x.key === m.team_key);
+    const p = t ? peopleOf(t).find((x) => x.id === m.person) : null;
+    return `${p?.name ?? m.role_key} · ${t?.name ?? m.team_key}`;
+  };
 
   const generate = async () => {
     if (!role) return;
@@ -123,6 +137,17 @@ export default function TeamDrawer({ org, team, index, selectedRole, onSelectRol
               {role.suggested_workflows.map((s) => <button key={s} className="chip" onClick={() => setGoal(s)}>{s}</button>)}
             </div>
             <textarea rows={2} value={goal} onChange={(e) => setGoal(e.target.value)} placeholder="e.g. Email every overdue invoice a reminder and mark it Reminded" />
+            {matches.length > 0 && (
+              <div className="reuse">
+                <div className="eyebrow">♻ Will reuse an existing skill</div>
+                {matches.map((m, k) => (
+                  <div key={m.id} className={`reuse-row ${k === 0 ? "on" : ""}`}>
+                    <b>📘 {m.name}</b>
+                    <span className="muted">{whoHas(m)} · {m.why} · {Math.round(m.score * 100)}% match</span>
+                  </div>
+                ))}
+              </div>
+            )}
             <button className="btn btn-go" disabled={busy || goal.trim().length < 3} onClick={generate}>
               {busy ? "Designing workflow…" : person ? `✦ Design workflow for ${person.name}` : "✦ Design workflow"}
             </button>
@@ -210,6 +235,7 @@ export function WorkflowCard({ wf, onSaved, onError, onRun, defaultOpen, owner }
     try { await put(`/api/workflows/${wf.id}`, { steps }); setDirty(false); setEditing(false); onSaved(); } catch (e: any) { onError(e.message); }
   };
   const tag = wf.kind === "hero" ? ["runs live", "tag-go"] : wf.kind === "skill" ? ["📘 recorded skill", "tag-skill"] : ["designed", ""];
+  const reused = Array.from(new Map(wf.steps.filter((s) => s.from_skill).map((s) => [s.from_skill!.id, s.from_skill!.name])).values());
   return (
     <section className="wf">
       <button className="wf-head" onClick={() => setOpen(!open)}>
@@ -220,6 +246,7 @@ export function WorkflowCard({ wf, onSaved, onError, onRun, defaultOpen, owner }
       {open && (
         <>
           {wf.kind === "skill" && wf.meta?.how && <p className="muted">Learned from a recording ({wf.meta.how}).</p>}
+          {reused.length > 0 && <p className="muted">♻ Built on existing skill{reused.length > 1 ? "s" : ""}: {reused.map((n) => `📘 ${n}`).join(", ")}</p>}
           {editing ? <StepEditor steps={steps} onChange={(s) => { setSteps(s); setDirty(true); }} /> : <StepList steps={steps} />}
           {preview && preview.rows.length > 0 && !editing && (
             <p className="preview-rows">Next run touches <b>{preview.rows.length}</b> row(s): {preview.rows.slice(0, 4).map((r) => r.label).join(", ")}{preview.rows.length > 4 ? "…" : ""}</p>

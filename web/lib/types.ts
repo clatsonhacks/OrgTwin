@@ -14,6 +14,18 @@ export type Step = {
   key?: string; team?: string; to?: string; title: string; tool: string;
   action?: string; params?: Record<string, any>; per_row?: boolean;
   description?: string; needs_approval?: boolean; manual_min?: number;
+  from_skill?: { id: number; name: string };
+};
+export type GraphNode = {
+  id: string; type: "org" | "team" | "role" | "person" | "skill" | "workflow" | "tool"; label: string;
+  team?: string; role?: string; person?: string; kind?: string; workflow_id?: number; steps?: number;
+  tasks?: string[]; headcount?: number; executable?: boolean;
+};
+export type GraphEdge = { source: string; target: string; type: "has_team" | "has_role" | "seat" | "owns" | "uses_tool" | "reuses" };
+export type OrgGraph = { nodes: GraphNode[]; edges: GraphEdge[] };
+export type SkillMatch = {
+  id: number; name: string; team_key: string; role_key: string; person: string; person_name: string;
+  score: number; why: string; matched: string[];
 };
 export type Workflow = {
   id: number; team_key: string; role_key: string; name: string; goal: string;

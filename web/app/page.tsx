@@ -9,6 +9,7 @@ import TeamDrawer from "@/components/ui/TeamDrawer";
 import { Activity, ApprovalCard, Departments, Hotbar, RunDetails, SidePanel, SkillLibrary, Toasts, TopBar, useRunView,
          type Toast } from "@/components/ui/Hud";
 import SkillRecorder from "@/components/ui/SkillRecorder";
+import OrgGraph from "@/components/ui/OrgGraph";
 import { ownerOf, type Person } from "@/lib/people";
 
 const World = dynamic(() => import("@/components/world/World"), { ssr: false });
@@ -37,6 +38,8 @@ export default function Home() {
   const [inside, setInside] = useState<string | null>(null);
   const [selectedPerson, setSelectedPerson] = useState<string | null>(null);
   const [activePerson, setActivePerson] = useState<string | null>(null);
+  const [showGraph, setShowGraph] = useState(false);
+  const [graphVersion, setGraphVersion] = useState(0);
   const runIdRef = useRef<number | null>(null);
   runIdRef.current = runId;
 
@@ -52,7 +55,7 @@ export default function Home() {
         api<Org | null>("/api/org"), api<Workflow[]>("/api/workflows"), api<Approval[]>("/api/approvals"),
         api<Metrics>("/api/metrics"), api<Outbox>("/api/outbox"),
       ]);
-      setOrg(o); setWorkflows(w); setApprovals(a); setMetrics(m); setOutbox(ob);
+      setOrg(o); setWorkflows(w); setApprovals(a); setMetrics(m); setOutbox(ob); setGraphVersion((v) => v + 1);
     } catch (e: any) { toast(e.message, "bad"); }
     setLoaded(true);
   }, [toast]);
@@ -104,6 +107,8 @@ export default function Home() {
           if (p.person_name) toast(`📘 ${p.person_name} now owns “${p.name}”`, "ok");
           refresh(); break;
         case "workflow.created":
+          if (p.reused?.length) toast(`♻ New workflow built on ${p.reused.map((n: string) => `📘 ${n}`).join(", ")}`, "ok");
+          refresh(); break;
         case "skill.saved":
           refresh(); break;
       }
@@ -182,8 +187,9 @@ export default function Home() {
 
       {org && !showStart && (
         <>
-          <Departments org={org} selected={selectedTeam} onSelect={selectTeam} />
+          <Departments org={org} selected={selectedTeam} onSelect={selectTeam} onGraph={() => setShowGraph(true)} />
           <div className="fabs">
+            <button className="btn fab-graph" onClick={() => setShowGraph(true)}>🕸</button>
             <button className={`btn ${panel === "skills" ? "btn-on" : ""}`} onClick={() => setPanel(panel === "skills" ? null : "skills")}>
               📘 Skills {skills.length > 0 && <span className="count count-skill">{skills.length}</span>}
             </button>
@@ -229,6 +235,10 @@ export default function Home() {
         <SkillRecorder team={recTeam} teamIndex={recTeamIdx} role={recRole} person={recorder.person} onError={(m) => toast(m, "bad")}
                        onClose={() => setRecorder(null)}
                        onSaved={(w) => { setRecorder(null); refresh(); toast(`📘 ${recorder.person?.name ?? recRole.name} learned “${w.name}”`, "ok"); }} />
+      )}
+      {showGraph && org && (
+        <OrgGraph org={org} version={graphVersion} onClose={() => setShowGraph(false)}
+                  onVisit={(t, person) => { setShowGraph(false); enter(t); selectPerson(person); }} />
       )}
       <Toasts toasts={toasts} />
     </main>

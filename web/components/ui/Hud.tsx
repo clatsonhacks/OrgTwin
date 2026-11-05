@@ -61,7 +61,9 @@ function CubeLogo() {
 
 /* ---------- departments list (2D fallback for the world) ---------- */
 
-export function Departments({ org, selected, onSelect }: { org: Org; selected: string | null; onSelect: (k: string) => void }) {
+export function Departments({ org, selected, onSelect, onGraph }: {
+  org: Org; selected: string | null; onSelect: (k: string) => void; onGraph?: () => void;
+}) {
   const [open, setOpen] = useState(true);
   const max = Math.max(1, ...org.teams.map((t) => t.automatable_hours));
   return (
@@ -82,6 +84,7 @@ export function Departments({ org, selected, onSelect }: { org: Org; selected: s
           ))}
         </ul>
       )}
+      {onGraph && <button className="btn depts-graph" onClick={onGraph}>🕸 Org knowledge graph</button>}
     </nav>
   );
 }

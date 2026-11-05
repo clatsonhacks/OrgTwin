@@ -28,6 +28,7 @@ export function StepList({ steps }: { steps: Step[] }) {
           <span className="slot slot-sm">{stepIcon(s)}</span>
           <div className="grow">
             <div>{s.title} {s.needs_approval && <span className="tag tag-warn">approval</span>} {s.per_row && <span className="tag">each row</span>}</div>
+            {s.from_skill && (i === 0 || steps[i - 1].from_skill?.id !== s.from_skill.id) && <div className="from-skill">♻ reused from 📘 {s.from_skill.name}</div>}
             <div className="muted">{describe(s)}</div>
           </div>
         </li>

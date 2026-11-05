@@ -8,7 +8,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import desc, func, select
 
-from . import a2a, engine, llm, orggen, skills, workflows
+from . import a2a, engine, graph, llm, orggen, skills, workflows
 from .config import settings
 from .connectors import email, sheets, slack
 from .db import Approval, Event, Org, Run, SessionLocal, Workflow, init_db
@@ -154,16 +154,47 @@ async def generate_workflow(body: WorkflowGenIn):
     if not team or not role:
         raise HTTPException(404, "team or role not found")
     _check_person(role, body.person)
-    steps, mocked = await workflows.generate(team, role, body.goal, await sheets.columns())
+    candidates = graph.relevant_skills(body.goal, team["key"], role["key"], body.person, _skills(org.id))
+    full = {w["id"]: w for w in _skills(org.id)}
+    steps, mocked, used = await workflows.generate(team, role, body.goal, await sheets.columns(),
+                                                   [full[c["id"]] for c in candidates])
     meta = {"person": body.person, "person_name": body.person_name or ""} if body.person else {}
+    if used:
+        meta["uses_skills"] = used
     with SessionLocal() as s:
         w = Workflow(org_id=org.id, team_key=team["key"], role_key=role["key"], name=body.goal[:120],
                      goal=body.goal, kind="draft", steps=steps, meta=meta)
         s.add(w)
         s.commit()
         out = {**_wf_dict(w), "mocked": mocked}
-    bus.emit("workflow.created", {"workflow_id": out["id"], "team": team["key"], "role": role["key"]})
+    bus.emit("workflow.created", {"workflow_id": out["id"], "team": team["key"], "role": role["key"],
+                                  "reused": [full[i]["name"] for i in used]})
     return out
+
+
+def _skills(org_id: int) -> list[dict]:
+    with SessionLocal() as s:
+        q = select(Workflow).where(Workflow.org_id == org_id, Workflow.kind == "skill").order_by(Workflow.id)
+        return [_wf_dict(w) for w in s.scalars(q)]
+
+
+# ---------- knowledge graph ----------
+@app.get("/api/graph")
+def org_graph():
+    """Org knowledge graph: teams, roles, people (desks), skills/workflows, tools and reuse links."""
+    with SessionLocal() as s:
+        org = _latest_org(s)
+        if not org:
+            return {"nodes": [], "edges": []}
+        wfs = [_wf_dict(w) for w in s.scalars(select(Workflow).where(Workflow.org_id == org.id).order_by(Workflow.id))]
+        return graph.build(_org_dict(org), wfs)
+
+
+@app.get("/api/graph/suggest")
+def suggest_skills(team: str, role: str, goal: str = "", person: str | None = None):
+    """Existing skills a new workflow for this goal would reuse (best first)."""
+    org, t, r = _team_role(team, role)
+    return graph.relevant_skills(goal, t["key"], r["key"], person, _skills(org.id))
 
 
 @app.put("/api/workflows/{wf_id}", dependencies=[Depends(require_token)])
