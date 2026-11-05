@@ -1,0 +1,408 @@
+"""OrgTwin API."""
+import asyncio
+from contextlib import asynccontextmanager
+
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
+from sqlalchemy import desc, func, select
+
+from . import a2a, engine, llm, orggen, skills, workflows
+from .config import settings
+from .connectors import email, sheets, slack
+from .db import Approval, Event, Org, Run, SessionLocal, Workflow, init_db
+from .events import bus, sse_format
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    init_db()
+    yield
+
+
+app = FastAPI(title="OrgTwin API", version="0.1.0", lifespan=lifespan)
+app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins, allow_methods=["*"],
+                   allow_headers=["*"])
+_tasks: set[asyncio.Task] = set()
+
+
+def require_token(x_access_token: str = Header(default="")) -> None:
+    if settings.app_access_token and x_access_token != settings.app_access_token:
+        raise HTTPException(401, "missing or wrong X-Access-Token")
+
+
+def _org_dict(org: Org | None) -> dict | None:
+    if org is None:
+        return None
+    return {"id": org.id, "name": org.name, "source": org.source, **org.data}
+
+
+def _latest_org(s) -> Org | None:
+    return s.scalars(select(Org).order_by(desc(Org.id)).limit(1)).first()
+
+
+def _wf_dict(w: Workflow) -> dict:
+    return {"id": w.id, "org_id": w.org_id, "team_key": w.team_key, "role_key": w.role_key, "name": w.name,
+            "goal": w.goal, "kind": w.kind, "steps": w.steps, "meta": w.meta or {},
+            "executable": w.kind == "hero" or workflows.is_executable(w.steps or [])}
+
+
+# ---------- status ----------
+@app.get("/api/health")
+def health():
+    return {"ok": True}
+
+
+@app.get("/api/status")
+async def status():
+    modes = settings.modes()
+    vision = await llm.vision_model()
+    return {"modes": {**modes, "vision": vision or "none"},
+            "demo_mode": any(v == "mock" for k, v in modes.items() if k != "runner"),
+            "auth_required": bool(settings.app_access_token)}
+
+
+# ---------- org ----------
+class OrgIn(BaseModel):
+    description: str = Field(default="", max_length=4000)
+    url: str = Field(default="", max_length=500)
+    csv: str = Field(default="", max_length=200_000)
+
+
+@app.post("/api/org/generate", dependencies=[Depends(require_token)])
+async def generate_org(body: OrgIn):
+    if not (body.description.strip() or body.url.strip() or body.csv.strip()):
+        raise HTTPException(400, "describe the company, give a URL, or upload a CSV")
+    data, source = await orggen.generate(body.description, body.url, body.csv)
+    with SessionLocal() as s:
+        org = Org(name=data["company"], data=data, source=source)
+        s.add(org)
+        s.flush()
+        s.add(Workflow(org_id=org.id, team_key="sales", role_key="sdr", name="Lead-to-cash", kind="hero",
+                       goal="Turn a new lead into a paying, onboarded customer",
+                       steps=engine.hero_workflow_steps()))
+        s.commit()
+        out = _org_dict(org)
+    sheets.reset_mock()
+    bus.emit("org.generated", {"org_id": out["id"], "company": out["company"], "source": source})
+    return out
+
+
+@app.get("/api/org")
+def get_org():
+    with SessionLocal() as s:
+        return _org_dict(_latest_org(s))
+
+
+@app.get("/api/agents")
+def agents():
+    with SessionLocal() as s:
+        org = _latest_org(s)
+        return [a2a.agent_card(t) for t in (org.data["teams"] if org else [])]
+
+
+# ---------- workflows ----------
+class WorkflowGenIn(BaseModel):
+    team_key: str
+    role_key: str
+    goal: str = Field(min_length=3, max_length=500)
+
+
+class WorkflowUpdateIn(BaseModel):
+    name: str | None = None
+    steps: list[dict]
+
+
+@app.get("/api/workflows")
+def list_workflows(team: str | None = None):
+    with SessionLocal() as s:
+        org = _latest_org(s)
+        if not org:
+            return []
+        q = select(Workflow).where(Workflow.org_id == org.id)
+        if team:
+            q = q.where(Workflow.team_key == team)
+        return [_wf_dict(w) for w in s.scalars(q.order_by(Workflow.id))]
+
+
+@app.post("/api/workflows/generate", dependencies=[Depends(require_token)])
+async def generate_workflow(body: WorkflowGenIn):
+    with SessionLocal() as s:
+        org = _latest_org(s)
+    if not org:
+        raise HTTPException(400, "generate an org first")
+    team = next((t for t in org.data["teams"] if t["key"] == body.team_key), None)
+    role = next((r for r in (team or {}).get("roles", []) if r["key"] == body.role_key), None)
+    if not team or not role:
+        raise HTTPException(404, "team or role not found")
+    steps, mocked = await workflows.generate(team, role, body.goal, await sheets.columns())
+    with SessionLocal() as s:
+        w = Workflow(org_id=org.id, team_key=team["key"], role_key=role["key"], name=body.goal[:120],
+                     goal=body.goal, kind="draft", steps=steps)
+        s.add(w)
+        s.commit()
+        out = {**_wf_dict(w), "mocked": mocked}
+    bus.emit("workflow.created", {"workflow_id": out["id"], "team": team["key"], "role": role["key"]})
+    return out
+
+
+@app.put("/api/workflows/{wf_id}", dependencies=[Depends(require_token)])
+def update_workflow(wf_id: int, body: WorkflowUpdateIn):
+    with SessionLocal() as s:
+        w = s.get(Workflow, wf_id)
+        if not w:
+            raise HTTPException(404, "workflow not found")
+        if w.kind == "hero":
+            raise HTTPException(400, "the hero workflow is fixed in this version")
+        w.steps = workflows.normalize(body.steps)
+        if body.name:
+            w.name = body.name[:120]
+        s.commit()
+        return _wf_dict(w)
+
+
+def _team_role(team_key: str, role_key: str):
+    with SessionLocal() as s:
+        org = _latest_org(s)
+    if not org:
+        raise HTTPException(400, "generate an org first")
+    team = next((t for t in org.data["teams"] if t["key"] == team_key), None)
+    role = next((r for r in (team or {}).get("roles", []) if r["key"] == role_key), None)
+    if not team or not role:
+        raise HTTPException(404, "team or role not found")
+    return org, team, role
+
+
+# ---------- skill recorder ----------
+class AnalyzeIn(BaseModel):
+    team_key: str
+    role_key: str
+    transcript: str = Field(default="", max_length=20_000)
+    frames: list[str] = Field(default_factory=list, max_length=60)
+    title: str = Field(default="", max_length=120)
+
+
+class SkillIn(BaseModel):
+    team_key: str
+    role_key: str
+    name: str = Field(min_length=2, max_length=120)
+    steps: list[dict]
+    meta: dict = Field(default_factory=dict)
+
+
+@app.post("/api/skills/analyze", dependencies=[Depends(require_token)])
+async def analyze_skill(body: AnalyzeIn):
+    if any(len(f) > 1_500_000 for f in body.frames):
+        raise HTTPException(413, "a frame is too large; send JPEG keyframes under ~1 MB")
+    if not body.transcript.strip() and not body.frames:
+        raise HTTPException(400, "send at least narration or some frames")
+    _, team, role = _team_role(body.team_key, body.role_key)
+    out = await skills.analyze(team, role, body.transcript, body.frames, await sheets.columns(), body.title)
+    bus.emit("skill.analyzed", {"team": team["key"], "role": role["key"], "how": out["meta"]["how"],
+                                "steps": len(out["steps"])})
+    return out
+
+
+@app.post("/api/skills", dependencies=[Depends(require_token)])
+def save_skill(body: SkillIn):
+    org, team, role = _team_role(body.team_key, body.role_key)
+    meta = {k: v for k, v in body.meta.items() if k != "frames"}  # never persist frames
+    with SessionLocal() as s:
+        w = Workflow(org_id=org.id, team_key=team["key"], role_key=role["key"], name=body.name, goal=body.name,
+                     kind="skill", steps=workflows.normalize(body.steps), meta=meta)
+        s.add(w)
+        s.commit()
+        out = _wf_dict(w)
+    bus.emit("skill.saved", {"workflow_id": out["id"], "team": team["key"], "role": role["key"], "name": out["name"]})
+    return out
+
+
+@app.get("/api/skills")
+def list_skills():
+    with SessionLocal() as s:
+        org = _latest_org(s)
+        if not org:
+            return []
+        q = select(Workflow).where(Workflow.org_id == org.id, Workflow.kind == "skill").order_by(Workflow.id)
+        return [_wf_dict(w) for w in s.scalars(q)]
+
+
+@app.get("/api/sheet/columns")
+async def sheet_columns():
+    return {"columns": await sheets.columns(), "mode": sheets.mode()}
+
+
+@app.get("/api/workflows/{wf_id}/preview")
+async def preview_workflow(wf_id: int):
+    """Dry run of the first 'read rows' step: which rows the workflow would touch."""
+    with SessionLocal() as s:
+        w = s.get(Workflow, wf_id)
+        if not w:
+            raise HTTPException(404, "workflow not found")
+        steps = w.steps or []
+    read = next((x for x in steps if x.get("action") == "read_rows"), None)
+    if not read:
+        return {"rows": [], "note": "this workflow does not read rows"}
+    rows = [r for r in await sheets.list_leads() if sheets.matches(r, read["params"].get("where", {}))]
+    rows = rows[: int(read["params"].get("limit") or 10)]
+    return {"rows": [{"label": engine._row_label(r), "email": r.get("email", ""), "status": r.get("status", "")}
+                     for r in rows], "where": read["params"].get("where"), "mode": sheets.mode()}
+
+
+@app.post("/api/workflows/{wf_id}/run", dependencies=[Depends(require_token)])
+async def run_workflow(wf_id: int):
+    with SessionLocal() as s:
+        w = s.get(Workflow, wf_id)
+        if not w:
+            raise HTTPException(404, "workflow not found")
+        org = s.get(Org, w.org_id)
+        if w.kind == "hero":
+            raise HTTPException(400, "use POST /api/runs for the lead-to-cash workflow")
+        if not workflows.is_executable(w.steps or []):
+            raise HTTPException(400, "this workflow has steps the engine cannot run yet")
+        active = s.scalars(select(Run).where(Run.status.in_(["running", "waiting_approval"]))).first()
+        if active:
+            raise HTTPException(409, f"run {active.id} is still in progress")
+        run = Run(org_id=w.org_id, workflow_id=w.id, status="running", context={})
+        s.add(run)
+        s.commit()
+        run_id, wf = run.id, _wf_dict(w)
+    team_name = next((t["name"] for t in org.data["teams"] if t["key"] == wf["team_key"]), wf["team_key"])
+    t = asyncio.create_task(engine.run_workflow(run_id, wf, team_name))
+    _tasks.add(t)
+    t.add_done_callback(_tasks.discard)
+    return {"run_id": run_id}
+
+
+# ---------- runs ----------
+@app.post("/api/runs", dependencies=[Depends(require_token)])
+async def start_run():
+    with SessionLocal() as s:
+        org = _latest_org(s)
+        if not org:
+            raise HTTPException(400, "generate an org first")
+        wf = s.scalars(select(Workflow).where(Workflow.org_id == org.id, Workflow.kind == "hero")).first()
+        active = s.scalars(select(Run).where(Run.status.in_(["running", "waiting_approval"]))).first()
+        if active:
+            raise HTTPException(409, f"run {active.id} is still in progress")
+        run = Run(org_id=org.id, workflow_id=wf.id, status="running", context={})
+        s.add(run)
+        s.commit()
+        run_id = run.id
+    t = asyncio.create_task(engine.run_lead_to_cash(run_id))
+    _tasks.add(t)
+    t.add_done_callback(_tasks.discard)
+    return {"run_id": run_id}
+
+
+def _run_dict(s, run: Run, with_events: bool = False) -> dict:
+    out = {"id": run.id, "status": run.status, "context": run.context,
+           "created_at": run.created_at, "finished_at": run.finished_at}
+    if with_events:
+        out["events"] = [{"id": e.id, "type": e.type, "payload": e.payload, "ts": e.created_at}
+                         for e in s.scalars(select(Event).where(Event.run_id == run.id).order_by(Event.id))]
+    return out
+
+
+@app.get("/api/runs")
+def list_runs():
+    with SessionLocal() as s:
+        return [_run_dict(s, r) for r in s.scalars(select(Run).order_by(desc(Run.id)).limit(20))]
+
+
+@app.get("/api/runs/{run_id}")
+def get_run(run_id: int):
+    with SessionLocal() as s:
+        run = s.get(Run, run_id)
+        if not run:
+            raise HTTPException(404, "run not found")
+        return _run_dict(s, run, with_events=True)
+
+
+# ---------- approvals ----------
+class DecisionIn(BaseModel):
+    approved: bool
+    who: str = "human"
+
+
+@app.get("/api/approvals")
+def list_approvals(status: str = "pending"):
+    with SessionLocal() as s:
+        q = select(Approval).order_by(desc(Approval.id))
+        if status != "all":
+            q = q.where(Approval.status == status)
+        return [{"id": a.id, "run_id": a.run_id, "team_key": a.team_key, "title": a.title,
+                 "payload": a.payload, "status": a.status, "decided_by": a.decided_by,
+                 "created_at": a.created_at} for a in s.scalars(q.limit(50))]
+
+
+@app.post("/api/approvals/{approval_id}", dependencies=[Depends(require_token)])
+def decide(approval_id: int, body: DecisionIn):
+    try:
+        return engine.decide(approval_id, body.approved, body.who)
+    except KeyError:
+        raise HTTPException(404, "approval not found")
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+
+
+# ---------- outbox / audit / metrics ----------
+@app.get("/api/outbox")
+def outbox():
+    return {"emails": email.outbox[-50:][::-1], "slack": slack.posted[-50:][::-1]}
+
+
+@app.get("/api/audit")
+def audit(limit: int = 100):
+    with SessionLocal() as s:
+        return [{"id": e.id, "run_id": e.run_id, "type": e.type, "payload": e.payload, "ts": e.created_at}
+                for e in s.scalars(select(Event).order_by(desc(Event.id)).limit(min(limit, 500)))]
+
+
+@app.get("/api/metrics")
+def metrics():
+    with SessionLocal() as s:
+        org = _latest_org(s)
+        runs = s.scalars(select(Run)).all()
+        completed = [r for r in runs if r.status == "completed" and (r.context or {}).get("hours_saved")]
+        steps = s.scalar(select(func.count()).select_from(Event).where(Event.type == "step.completed")) or 0
+        approvals = s.scalar(select(func.count()).select_from(Approval)) or 0
+    teams = org.data["teams"] if org else []
+    return {
+        "runs_total": len(runs),
+        "runs_completed": len(completed),
+        "steps_executed": steps,
+        "approvals": approvals,
+        "hours_saved": round(sum(r.context["hours_saved"] for r in completed), 2),
+        "manual_minutes_per_run": engine.MANUAL_MINUTES,
+        "automatable_hours_per_week": round(sum(t.get("automatable_hours", 0) for t in teams), 1),
+    }
+
+
+@app.post("/api/demo/reset", dependencies=[Depends(require_token)])
+def demo_reset():
+    sheets.reset_mock()
+    return {"ok": True}
+
+
+# ---------- live events ----------
+@app.get("/api/events/stream")
+async def stream(request: Request):
+    q = bus.subscribe()
+
+    async def gen():
+        try:
+            yield "retry: 2000\n\n"
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    data = await asyncio.wait_for(q.get(), timeout=15)
+                    yield sse_format(data)
+                except asyncio.TimeoutError:
+                    yield ": keep-alive\n\n"
+        finally:
+            bus.unsubscribe(q)
+
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})

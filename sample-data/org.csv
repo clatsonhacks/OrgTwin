@@ -1,0 +1,9 @@
+team,role,headcount,tasks,hours_per_week
+Sales,SDR,4,Research leads;Send outreach;Update CRM,9
+Sales,Account Executive,3,Run demos;Write proposals;Negotiate,5
+Finance,AR Specialist,2,Create invoices;Chase payments;Apply payments,8
+Finance,Accountant,1,Reconcile transactions;Month-end close,6
+Customer Success,Onboarding Specialist,2,Kick-off calls;Send onboarding emails;Track activation,6
+Customer Success,Support Agent,3,Triage tickets;Resolve issues,10
+Engineering,Software Engineer,8,Build features;Fix bugs;Code review,3
+Marketing,Content Marketer,2,Write blog posts;Newsletters,7

@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Practice desk</title>
+<style>
+  body{margin:0;font:15px/1.4 system-ui,sans-serif;background:#eef1f5;color:#1d2333}
+  .app{display:none;height:100vh;flex-direction:column}.app.on{display:flex}
+  .bar{display:flex;align-items:center;gap:14px;padding:10px 16px;color:#fff;font-weight:600}
+  .sheet .bar{background:#1f7a4d}.mail .bar{background:#2f5fb3}
+  .tabs{display:flex;gap:6px;padding:8px 16px;background:#dfe5ec}
+  .tabs button{border:0;border-radius:6px;padding:6px 14px;background:#fff;cursor:pointer;font:inherit}
+  .tabs button.on{background:#1d2333;color:#fff}
+  table{border-collapse:collapse;margin:16px;background:#fff;box-shadow:0 1px 3px #0002}
+  th,td{border:1px solid #cfd6df;padding:8px 12px;text-align:left}th{background:#e9eef4}
+  tr.hl td{background:#fff6c7}
+  .filter{margin:12px 16px 0;display:flex;gap:8px;align-items:center}
+  select,input,textarea{font:inherit;padding:6px 8px;border:1px solid #9aa6b5;border-radius:6px}
+  .compose{margin:16px;background:#fff;padding:16px;border-radius:8px;box-shadow:0 1px 3px #0002;max-width:720px;display:grid;gap:10px}
+  .compose textarea{height:150px}
+  .send{justify-self:start;background:#2f5fb3;color:#fff;border:0;border-radius:6px;padding:8px 18px;font-weight:600}
+  .toast{margin:16px;color:#1f7a4d;font-weight:600}
+</style></head><body>
+<nav class="tabs"><button id="t-sheet" class="on" onclick="show('sheet')">📊 Sheets</button><button id="t-mail" onclick="show('mail')">✉️ Mail</button></nav>
+<section id="sheet" class="app sheet on">
+  <div class="bar">📊 Sheets — Leads.xlsx</div>
+  <div class="filter">Filter <b>status</b> = <select id="flt" onchange="filt()"><option value="">(all)</option><option>New</option><option>Contacted</option></select></div>
+  <table id="tbl"><thead><tr><th>id</th><th>name</th><th>company</th><th>email</th><th>notes</th><th>deal_value</th><th>status</th></tr></thead><tbody>
+    <tr><td>L-101</td><td>Dana Rivera</td><td>Northwind Robotics</td><td>dana@example.com</td><td>Inbound, budget approved</td><td>4800</td><td class="st">New</td></tr>
+    <tr><td>L-104</td><td>Leo Park</td><td>Cobalt Dental</td><td>leo@example.com</td><td>Signed last month</td><td>3000</td><td class="st">Contacted</td></tr>
+    <tr><td>L-102</td><td>Sam Okafor</td><td>Bluebird Clinics</td><td>sam@example.com</td><td>Webinar attendee</td><td>2400</td><td class="st">New</td></tr>
+    <tr><td>L-103</td><td>Priya Nair</td><td>Kite Logistics</td><td>priya@example.com</td><td>Referral, urgent</td><td>9600</td><td class="st">New</td></tr>
+  </tbody></table>
+</section>
+<section id="mail" class="app mail">
+  <div class="bar">✉️ Mail — New message</div>
+  <div class="compose">
+    <input id="to" placeholder="To"><input id="subj" placeholder="Subject"><textarea id="body" placeholder="Message"></textarea>
+    <button class="send" id="send" onclick="sent()">Send</button><div id="ok" class="toast"></div>
+  </div>
+</section>
+<script>
+function show(id){for(const a of ['sheet','mail']){document.getElementById(a).classList.toggle('on',a===id);document.getElementById('t-'+a).classList.toggle('on',a===id)}}
+function filt(){const v=document.getElementById('flt').value;for(const tr of document.querySelectorAll('#tbl tbody tr')){tr.style.display=!v||tr.querySelector('.st').textContent===v?'':'none'}}
+function sent(){document.getElementById('ok').textContent='✓ Message sent to '+document.getElementById('to').value}
+</script></body></html>
