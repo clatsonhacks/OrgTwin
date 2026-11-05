@@ -47,7 +47,9 @@ Writing workflows is the slow part of any agent platform. In OrgTwin you **do th
    whole batch and lists every recipient before anything is sent.
 
 Step library the engine can run today: read sheet rows (with a filter), update a row, AI write, send
-email (body written by the AI), human approval, Slack post. Templates like `{{row.email}}` and
+email (body written by the AI), human approval, Slack post — plus the connectors **Discord, Microsoft
+Teams, Telegram, Notion, HubSpot, Stripe invoices and generic webhooks** (see
+[docs/connectors.md](docs/connectors.md)). Templates like `{{row.email}}` and
 `{{row.company}}` fill in each row. Workflows designed from a text description use the same format, so
 they run too.
 
@@ -130,11 +132,12 @@ import, and sandbox containment: no network, read-only, no secrets, timeout kill
 | `SMTP_*`, `EMAIL_REDIRECT_TO` | e.g. Gmail: `smtp.gmail.com`, port 587, an app password |
 | `STRIPE_SECRET_KEY` | Stripe dashboard → test mode → `sk_test_…` |
 | `SLACK_WEBHOOK_URL` | Slack app → Incoming Webhooks |
+| `DISCORD_WEBHOOK_URL`, `TEAMS_WEBHOOK_URL`, `TELEGRAM_*`, `NOTION_*`, `HUBSPOT_TOKEN`, `WEBHOOK_*` | Optional connectors — see [docs/connectors.md](docs/connectors.md). Each stays in demo mode until set. |
 
 ## Known limits (honest list)
 
-- Recorded and designed workflows run when they only use the step library above; steps for other
-  tools (MCP, HTTP, Stripe outside lead-to-cash) can be designed but not run yet.
+- Recorded and designed workflows run when they only use the step library and connectors above;
+  sandbox-code and MCP steps can be designed but not run yet.
 - Live screen recording needs a desktop browser with screen sharing (Chrome, Edge, Firefox); live
   transcription needs Chrome or Edge. Elsewhere you can upload a video and type the narration.
 - Vision model availability on Vultr Serverless Inference is not confirmed yet; without one the

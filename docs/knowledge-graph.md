@@ -13,7 +13,8 @@ their role, their tasks and what they own. From there you can:
   (`PUT /api/workflows/{id}/assign`).
 - **Record a skill** or **design a workflow** for them. The result is saved to that person (`meta.person`).
 
-A floating 📘 book marks everyone who owns a recorded skill. While a workflow runs, its owner types faster.
+On phones the panel is a bottom sheet: drag its handle down to collapse it, and use the row of chips under the
+top bar to switch departments. A floating 📘 book marks everyone who owns a recorded skill. While a workflow runs, its owner types faster.
 
 ## Knowledge graph
 

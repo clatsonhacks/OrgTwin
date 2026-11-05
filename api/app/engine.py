@@ -268,6 +268,7 @@ async def _run(run_id: int) -> None:
 import re as _re
 
 from . import workflows as _wf
+from .connectors import registry
 
 _TPL = _re.compile(r"\{\{\s*([\w.]+)\s*\}\}")
 
@@ -339,6 +340,8 @@ async def _exec(step: dict, ctx: dict, row: dict | None, team: str, team_name: s
         return {"email": sent, "llm": {"model": res.model, "mocked": res.mocked}}
     if tool == "slack":
         return await slack.post(render(p["text"], ctx, row))
+    if tool in registry.CONNECTORS:
+        return await registry.run(tool, action, {k: render(str(v), ctx, row) for k, v in p.items()})
     raise RuntimeError(f"step {tool}.{action} cannot run in the generic engine")
 
 

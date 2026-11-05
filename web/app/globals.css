@@ -304,7 +304,6 @@ blockquote { margin: 8px 0; padding: 6px 10px; border-left: 4px solid var(--team
 .enter-tag { font-family: var(--pixel); font-size: 14px; background: var(--grass); color: #fff; border: 2px solid var(--ink); border-radius: 6px;
   padding: 3px 10px; cursor: pointer; white-space: nowrap; box-shadow: 0 3px 0 var(--ink); text-shadow: 0 2px 0 var(--grass-d);
   animation: bob 1.4s ease-in-out infinite; }
-@keyframes bob { 50% { transform: translateY(-4px); } }
 .sign-office { cursor: default; }
 .rolesign { font-family: var(--pixel); font-size: 13px; background: var(--paper); border: 2px solid var(--ink); border-left: 6px solid var(--team);
   border-radius: 4px; padding: 1px 8px; white-space: nowrap; box-shadow: 0 2px 0 var(--ink); user-select: none; pointer-events: none; }
@@ -362,3 +361,71 @@ blockquote { margin: 8px 0; padding: 6px 10px; border-left: 4px solid var(--team
 .fab-graph { display: none; }
 @media (max-width: 900px) { .fab-graph { display: inline-block; } }
 .graph-side .linkbtn { text-align: left; padding: 0; }
+
+/* ---------- connectors ---------- */
+.conns { display: grid; gap: 6px; }
+.conn { background: #fff; border: 2px solid #d9cdb2; border-radius: 8px; }
+.conn.open { border-color: var(--ink); }
+.conn-head { display: flex; align-items: center; gap: 10px; width: 100%; background: none; border: 0; padding: 8px 10px; cursor: pointer; text-align: left; }
+.conn-head b { display: block; }
+.conn-head .muted { font-size: 12px; }
+.conn-icon { font-size: 22px; width: 28px; text-align: center; flex: none; }
+.conn-body { padding: 0 10px 10px 48px; font-size: 13px; display: grid; gap: 4px; }
+.conn-body code { font-size: 11px; background: var(--paper-2); border: 1px solid #d9cdb2; border-radius: 4px; padding: 0 4px; }
+.conn-body .row { display: flex; gap: 6px; align-items: center; margin-top: 4px; }
+.conn-body input { padding: 6px 8px; border: 2px solid var(--ink); border-radius: 6px; min-width: 0; }
+.ok-line { color: var(--grass-d); font-weight: 600; } .bad-line { color: var(--red-d); font-weight: 600; }
+
+/* ---------- graph zoom ---------- */
+.graph-body { position: relative; }
+.graph-zoom { position: absolute; left: 10px; top: 10px; display: grid; gap: 6px; z-index: 2; }
+.graph-zoom .iconbtn { width: 36px; height: 36px; font-size: 18px; background: var(--paper); border: 2px solid var(--ink); border-radius: 6px;
+  box-shadow: 0 2px 0 var(--ink); cursor: pointer; }
+
+/* ---------- phones ---------- */
+.mdock, .sheet-handle { display: none; }
+body { overscroll-behavior: none; }
+.world canvas { touch-action: none; }
+@media (max-width: 900px) {
+  .topbar { top: max(8px, env(safe-area-inset-top)); left: max(8px, env(safe-area-inset-left)); right: max(8px, env(safe-area-inset-right)); }
+  .fabs { display: none; }
+  .mdock { display: flex; gap: 6px; position: absolute; z-index: 101; left: 0; right: 0; top: calc(max(8px, env(safe-area-inset-top)) + 62px);
+    padding: 2px 8px 6px; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; scroll-snap-type: x proximity; }
+  .mdock::-webkit-scrollbar { display: none; }
+  .chip-btn { flex: none; display: inline-flex; align-items: center; gap: 6px; min-height: 40px; padding: 6px 12px; font: 600 14px var(--pixel);
+    background: var(--paper); border: 2px solid var(--ink); border-radius: 999px; box-shadow: 0 2px 0 var(--ink); cursor: pointer;
+    white-space: nowrap; scroll-snap-align: start; }
+  .chip-btn.on { background: var(--gold); }
+  .chip-btn .count { margin-left: 2px; }
+  .chip-btn.dept i { width: 12px; height: 12px; border: 2px solid var(--ink); border-radius: 3px; background: var(--team); }
+  .chip-btn.dept.on { background: #fff; box-shadow: 0 2px 0 var(--ink), inset 0 -4px 0 var(--team); }
+  .mdock-sep { flex: none; width: 2px; background: #1d233333; margin: 6px 2px; }
+  .toasts { top: calc(max(8px, env(safe-area-inset-top)) + 114px); }
+
+  /* bottom sheet */
+  .drawer { left: 0; right: 0; bottom: 0; top: auto; width: auto; max-height: 50vh; border-radius: 16px 16px 0 0; border-bottom: 0;
+    padding-bottom: env(safe-area-inset-bottom); transition: max-height .2s ease; overscroll-behavior: contain;
+    /* a fully opaque full-width sheet makes Chromium's compositor cull the WebGL canvas behind it
+       (seen in headless Chrome); a hair of translucency keeps the 3D view drawing above the sheet */
+    opacity: .999; }
+  .drawer.collapsed { max-height: 150px; overflow: hidden; }
+  .sheet-handle { display: grid; place-items: center; width: 100%; height: 22px; background: var(--paper); border: 0; cursor: grab;
+    position: sticky; top: 0; z-index: 2; touch-action: none; }
+  .sheet-handle i { width: 44px; height: 5px; border-radius: 3px; background: #1d233355; }
+  .drawer-head { top: 22px; padding-top: 6px; }
+  .bottom { bottom: max(8px, env(safe-area-inset-bottom)); }
+
+  /* comfortable tap targets; 16px inputs stop iOS from zooming on focus */
+  .btn { min-height: 40px; }
+  .x { width: 36px; height: 36px; }
+  input, textarea, select { font-size: 16px !important; }
+  .person { padding: 6px 10px 6px 6px; font-size: 14px; }
+  .chip { padding: 6px 12px; font-size: 13px; }
+  .linkbtn { font-size: 14px; padding: 4px 0; }
+
+  .graph-zoom .iconbtn { width: 42px; height: 42px; }
+  .graph-head h2 { font-size: 17px; }
+  .modal-bg { padding: 0; align-items: end; }
+  .modal { border-radius: 16px 16px 0 0; max-height: 92vh; }
+}
+@media (max-width: 1680px) { .fab-label { display: none; } }

@@ -1,8 +1,9 @@
 "use client";
 import { ACTIONS, TOOL_NAME, stepIcon } from "@/lib/api";
 import type { Step } from "@/lib/types";
+import { connectorTools, useConnectors } from "@/lib/connectors";
 
-const RUNNABLE = Object.keys(ACTIONS);
+const CORE = Object.keys(ACTIONS);
 
 /** Plain-language summary of what a step will do. */
 export function describe(s: Step): string {
@@ -17,6 +18,11 @@ export function describe(s: Step): string {
   if (s.tool === "llm") return `${each}AI writes: ${p.instruction}`;
   if (s.tool === "approval") return `Ask a person: ${p.title}`;
   if (s.tool === "slack") return `Post to Slack: ${p.text}`;
+  if (s.tool === "discord" || s.tool === "teams" || s.tool === "telegram") return `${each}post to ${TOOL_NAME[s.tool]}: ${p.text}`;
+  if (s.tool === "notion") return `${each}create Notion page “${p.title}”`;
+  if (s.tool === "hubspot") return `${each}create / update HubSpot contact ${p.email}`;
+  if (s.tool === "stripe") return `${each}invoice ${p.email} $${p.amount} via Stripe`;
+  if (s.tool === "webhook") return `${each}${p.method || "POST"} ${p.url}`;
   return s.description || TOOL_NAME[s.tool] || s.tool;
 }
 
@@ -40,6 +46,14 @@ export function StepList({ steps }: { steps: Step[] }) {
 export default function StepEditor({ steps, onChange }: { steps: Step[]; onChange: (s: Step[]) => void }) {
   const set = (i: number, patch: Partial<Step>) => onChange(steps.map((s, k) => (k === i ? { ...s, ...patch } : s)));
   const setP = (i: number, key: string, value: any) => set(i, { params: { ...(steps[i].params || {}), [key]: value } });
+  const conns = connectorTools(useConnectors());
+  const runnable = [...CORE, ...Object.keys(conns)];
+  const pickTool = (i: number, tool: string) => {
+    const c = conns[tool];
+    if (!c) return set(i, { tool, action: ACTIONS[tool]?.[0]?.key, params: {} });
+    const a = c.actions[0];
+    set(i, { tool, action: a.key, needs_approval: a.external, params: Object.fromEntries(a.params.map((x) => [x.name, x.default])) });
+  };
   const move = (i: number, d: number) => {
     const j = i + d; if (j < 0 || j >= steps.length) return;
     const n = [...steps]; [n[i], n[j]] = [n[j], n[i]]; onChange(n);
@@ -60,8 +74,8 @@ export default function StepEditor({ steps, onChange }: { steps: Step[]; onChang
                 <button className="iconbtn" onClick={() => onChange(steps.filter((_, k) => k !== i))} aria-label="Remove">✕</button>
               </div>
               <div className="row tight">
-                <select value={s.tool} onChange={(e) => set(i, { tool: e.target.value, action: ACTIONS[e.target.value]?.[0]?.key, params: {} })}>
-                  {[...RUNNABLE, ...(RUNNABLE.includes(s.tool) ? [] : [s.tool])].map((t) => <option key={t} value={t}>{TOOL_NAME[t] ?? t}</option>)}
+                <select value={s.tool} onChange={(e) => pickTool(i, e.target.value)} aria-label="Tool">
+                  {[...runnable, ...(runnable.includes(s.tool) ? [] : [s.tool])].map((t) => <option key={t} value={t}>{TOOL_NAME[t] ?? conns[t]?.name ?? t}</option>)}
                 </select>
                 {ACTIONS[s.tool]?.length > 1 && (
                   <select value={s.action} onChange={(e) => set(i, { action: e.target.value, params: {} })}>
@@ -104,6 +118,18 @@ export default function StepEditor({ steps, onChange }: { steps: Step[]; onChang
               )}
               {s.tool === "slack" && (
                 <div className="params col"><label>text <input value={p.text ?? ""} onChange={(e) => setP(i, "text", e.target.value)} /></label></div>
+              )}
+              {conns[s.tool] && (
+                <div className="params col">
+                  {(conns[s.tool].actions.find((a) => a.key === s.action) ?? conns[s.tool].actions[0]).params.map((x) => (
+                    <label key={x.name}>{x.label}
+                      {x.long
+                        ? <textarea rows={2} value={p[x.name] ?? ""} placeholder={x.default} onChange={(e) => setP(i, x.name, e.target.value)} />
+                        : <input value={p[x.name] ?? ""} placeholder={x.default} onChange={(e) => setP(i, x.name, e.target.value)} />}
+                    </label>
+                  ))}
+                  {conns[s.tool].mode === "mock" && <span className="muted">Demo mode — set {conns[s.tool].env.join(", ")} to go live.</span>}
+                </div>
               )}
             </div>
           </li>

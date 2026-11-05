@@ -23,6 +23,9 @@ export default function OrgGraph({ org, version, onClose, onVisit }: {
   const [hover, setHover] = useState<string | null>(null);
   const [view, setView] = useState({ x: -VIEW / 2, y: -VIEW / 2, w: VIEW });
   const drag = useRef<{ x: number; y: number; vx: number; vy: number } | null>(null);
+  const pointers = useRef(new Map<number, { x: number; y: number }>());
+  const pinch = useRef<number | null>(null);
+  const fitView = useRef(view);
   const svg = useRef<SVGSVGElement>(null);
 
   useEffect(() => { api<Graph>("/api/graph").then(setGraph).catch((e) => setErr(e.message)); }, [version]);
@@ -47,30 +50,51 @@ export default function OrgGraph({ org, version, onClose, onVisit }: {
     const pad = 230;
     const x0 = Math.min(...xs) - pad, x1 = Math.max(...xs) + pad, y0 = Math.min(...ys) - pad, y1 = Math.max(...ys) + pad;
     const w = Math.max(x1 - x0, y1 - y0, 500);
-    setView({ x: (x0 + x1) / 2 - w / 2, y: (y0 + y1) / 2 - w / 2, w });
+    const v = { x: (x0 + x1) / 2 - w / 2, y: (y0 + y1) / 2 - w / 2, w };
+    fitView.current = v;
+    setView(v);
   }, [placed]);
 
   const focus = sel ?? hover;
   const lit = useMemo(() => (focus ? neighbourhood(focus, graph?.edges ?? []) : null), [focus, graph]);
   const on = (id: string) => !lit || lit.has(id);
 
-  const wheel = (e: React.WheelEvent) => {
+  /** zoom by factor f around a screen point (defaults to the centre) */
+  const zoomAt = (f: number, clientX?: number, clientY?: number) => setView((v) => {
     const r = svg.current!.getBoundingClientRect();
-    const scale = view.w / Math.min(r.width, r.height);
-    const px = view.x + (e.clientX - r.left - (r.width - Math.min(r.width, r.height)) / 2) * scale;
-    const py = view.y + (e.clientY - r.top - (r.height - Math.min(r.width, r.height)) / 2) * scale;
-    const f = e.deltaY > 0 ? 1.12 : 1 / 1.12;
-    const w = Math.max(300, Math.min(2400, view.w * f));
-    setView({ w, x: px - (px - view.x) * (w / view.w), y: py - (py - view.y) * (w / view.w) });
+    const side = Math.min(r.width, r.height);
+    const scale = v.w / side;
+    const px = v.x + ((clientX ?? r.left + r.width / 2) - r.left - (r.width - side) / 2) * scale;
+    const py = v.y + ((clientY ?? r.top + r.height / 2) - r.top - (r.height - side) / 2) * scale;
+    const w = Math.max(250, Math.min(2600, v.w * f));
+    return { w, x: px - (px - v.x) * (w / v.w), y: py - (py - v.y) * (w / v.w) };
+  });
+  const wheel = (e: React.WheelEvent) => zoomAt(e.deltaY > 0 ? 1.12 : 1 / 1.12, e.clientX, e.clientY);
+  const down = (e: React.PointerEvent) => {
+    pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pointers.current.size === 2) { drag.current = null; pinch.current = null; return; }
+    drag.current = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y };
   };
-  const down = (e: React.PointerEvent) => { drag.current = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y }; };
   const move = (e: React.PointerEvent) => {
+    if (!pointers.current.has(e.pointerId)) return;
+    pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pointers.current.size === 2) {
+      const [a, b] = Array.from(pointers.current.values());
+      const d = Math.hypot(a.x - b.x, a.y - b.y);
+      if (pinch.current) zoomAt(pinch.current / d, (a.x + b.x) / 2, (a.y + b.y) / 2);
+      pinch.current = d;
+      return;
+    }
     if (!drag.current) return;
     const r = svg.current!.getBoundingClientRect();
     const scale = view.w / Math.min(r.width, r.height);
     setView((v) => ({ ...v, x: drag.current!.vx - (e.clientX - drag.current!.x) * scale, y: drag.current!.vy - (e.clientY - drag.current!.y) * scale }));
   };
-  const up = () => { drag.current = null; };
+  const up = (e: React.PointerEvent) => {
+    pointers.current.delete(e.pointerId);
+    pinch.current = null;
+    drag.current = null;
+  };
 
   const s = sel ? byId[sel] : null;
   const counts = {
@@ -99,7 +123,7 @@ export default function OrgGraph({ org, version, onClose, onVisit }: {
       </header>
       <div className="graph-body">
         <svg ref={svg} className="graph-svg" viewBox={`${view.x} ${view.y} ${view.w} ${view.w}`}
-             onWheel={wheel} onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerLeave={up}
+             onWheel={wheel} onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up} onPointerLeave={up}
              onClick={(e) => { if (e.target === svg.current) setSel(null); }}>
           <defs>
             <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
@@ -133,6 +157,11 @@ export default function OrgGraph({ org, version, onClose, onVisit }: {
           {err && <text x={0} y={0} textAnchor="middle" fontSize={18}>{err}</text>}
           {graph && !placed.length && <text x={0} y={0} textAnchor="middle" fontSize={18}>Build an org first</text>}
         </svg>
+        <div className="graph-zoom">
+          <button className="iconbtn" onClick={() => zoomAt(1 / 1.3)} aria-label="Zoom in">＋</button>
+          <button className="iconbtn" onClick={() => zoomAt(1.3)} aria-label="Zoom out">－</button>
+          <button className="iconbtn" onClick={() => setView(fitView.current)} aria-label="Fit">⤢</button>
+        </div>
         <aside className="graph-side">
           {!s ? (
             <>

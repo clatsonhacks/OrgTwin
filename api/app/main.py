@@ -10,7 +10,7 @@ from sqlalchemy import desc, func, select
 
 from . import a2a, engine, graph, llm, orggen, skills, workflows
 from .config import settings
-from .connectors import email, sheets, slack
+from .connectors import email, registry, sheets, slack
 from .db import Approval, Event, Org, Run, SessionLocal, Workflow, init_db
 from .events import bus, sse_format
 
@@ -421,7 +421,41 @@ def decide(approval_id: int, body: DecisionIn):
 # ---------- outbox / audit / metrics ----------
 @app.get("/api/outbox")
 def outbox():
-    return {"emails": email.outbox[-50:][::-1], "slack": slack.posted[-50:][::-1]}
+    return {"emails": email.outbox[-50:][::-1], "slack": slack.posted[-50:][::-1],
+            "messages": registry.sent[-50:][::-1]}
+
+
+# ---------- connectors ----------
+@app.get("/api/connectors")
+def list_connectors():
+    """Every connector, whether it is live or in demo mode, what it needs, and the actions it offers."""
+    core = [
+        {"key": "sheets", "name": "Google Sheets", "icon": "📊", "category": "data", "mode": "live" if sheets.mode() != "mock" else "mock",
+         "env": ["GOOGLE_SERVICE_ACCOUNT_JSON", "GOOGLE_SHEET_ID"], "setup": "Share the sheet with the service account email.", "actions": [], "core": True},
+        {"key": "email", "name": "Email (SMTP)", "icon": "✉️", "category": "chat", "mode": "live" if email.mode() != "mock" else "mock",
+         "env": ["SMTP_HOST", "SMTP_FROM", "SMTP_USER", "SMTP_PASSWORD"], "setup": "Gmail: smtp.gmail.com + an app password.", "actions": [], "core": True},
+        {"key": "slack", "name": "Slack", "icon": "💬", "category": "chat", "mode": "live" if slack.mode() != "mock" else "mock",
+         "env": ["SLACK_WEBHOOK_URL"], "setup": "Create an incoming webhook for a channel.", "actions": [], "core": True},
+    ]
+    return core + registry.catalog()
+
+
+class ConnectorTestIn(BaseModel):
+    url: str = Field(default="", max_length=2000)
+
+
+@app.post("/api/connectors/{key}/test", dependencies=[Depends(require_token)])
+async def test_connector(key: str, body: ConnectorTestIn | None = None):
+    if key not in registry.CONNECTORS:
+        raise HTTPException(404, "unknown connector (core connectors are tested by running the lead-to-cash demo)")
+    try:
+        out = await registry.test(key, (body.url if body else ""))
+    except registry.UnsafeURL as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:  # report the provider's error to the person setting it up
+        return {"ok": False, "mode": registry.CONNECTORS[key].mode(), "message": f"{type(e).__name__}: {e}"[:300]}
+    bus.emit("connector.tested", {"connector": key, **out})
+    return out
 
 
 @app.get("/api/audit")

@@ -57,13 +57,14 @@ function Scene({ org, selectedTeam, selectedRole, activeTeam, approvalTeams, cou
   const plot = selectedTeam ? layout.plots.find((p) => p.key === selectedTeam) ?? null : null;
   const maxHours = Math.max(1, ...teams.map((t) => t.automatable_hours));
   const insideIdx = inside ? teams.findIndex((t) => t.key === inside) : -1;
+  const narrow = useThree((s) => s.size.width <= 900);
   const insideTeam = insideIdx >= 0 ? teams[insideIdx] : null;
   const insideColor = insideTeam ? teamColor(insideTeam.key, insideIdx) : "#999";
   const office = useMemo(() => (insideTeam ? buildOffice(insideTeam, insideColor) : null), [insideTeam, insideColor]);
 
   const focus: Focus | null = office && insideTeam
     // the office is ~W×D; the island is 2·radius wide — scale the zoom so the room fills the view
-    ? { key: `office-${insideTeam.key}`, x: 0, y: 0.6, z: 0, scale: (layout.radius * 2.25) / (Math.max(office.W, office.D) * 1.25 + 2) }
+    ? { key: `office-${insideTeam.key}`, x: 0, y: 0.6, z: 0, scale: (layout.radius * 2.25) / (Math.max(office.W, office.D) * 1.25 + 2) * (narrow ? 0.72 : 1) }
     : plot ? { key: plot.key, x: plot.x, y: 1.5, z: plot.z, scale: 1.8 } : null;
 
   if (insideTeam && office) {
@@ -120,7 +121,13 @@ function CameraRig({ focus, controls, radius }: { focus: Focus | null; controls:
       moving.current = true;
       goal.current.zoom = focus ? Math.min(110, fit * focus.scale) : fit;
       goal.current.target.set(focus ? focus.x : 0, focus ? focus.y : 0, focus ? focus.z : 0);
-      if (focus && size.width > 900) {
+      if (focus && size.width <= 900) {
+        // phones: the panel is a bottom sheet, so push the focus up into the visible top half.
+        // Moving the target toward the camera (+x+z) moves the scene up on screen (sin(elevation) ≈ 0.55).
+        // visible band = between the top bars (~120px) and the sheet (50vh); centre the focus in it
+        const px = size.height / 2 - (120 + size.height * 0.5) / 2;
+        goal.current.target.add(new THREE.Vector3(1, 0, 1).normalize().multiplyScalar(px / goal.current.zoom / 0.55));
+      } else if (focus && size.width > 900) {
         // shift the view so the building sits left of the side panel (screen-right = (1,0,-1)/√2)
         const k = 210 / goal.current.zoom;
         goal.current.target.add(new THREE.Vector3(k, 0, -k).multiplyScalar(Math.SQRT1_2));

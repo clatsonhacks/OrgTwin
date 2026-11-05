@@ -2,7 +2,7 @@
 import { findPerson, ownerOf } from "@/lib/people";
 import { useMemo, useState } from "react";
 import type { Approval, LiveEvent, Metrics, Org, Outbox, Status, Step, Workflow } from "@/lib/types";
-import { stepIcon } from "@/lib/api";
+import { TOOL_ICON, TOOL_NAME, stepIcon } from "@/lib/api";
 import { teamColor } from "@/components/world/layout";
 
 /* ---------- top bar ---------- */
@@ -252,6 +252,16 @@ export function Activity({ outbox, events }: { outbox: Outbox; events: LiveEvent
             <summary><b>{m.subject}</b><span className="muted"> → {m.to}{m.mode === "mock" ? " · demo" : ""}</span></summary>
             <pre>{m.body}</pre>
           </details>
+        ))}
+      </section>
+      <section>
+        <h3>Connectors ({outbox.messages?.length ?? 0})</h3>
+        {!outbox.messages?.length && <p className="muted">Discord, Teams, Telegram, Notion, HubSpot, Stripe and webhook steps show up here.</p>}
+        {outbox.messages?.map((m, i) => (
+          <p key={i} className="slackmsg">
+            <b>{TOOL_ICON[m.tool] ?? "•"} {TOOL_NAME[m.tool] ?? m.tool}</b>{m.mode === "mock" ? <span className="muted"> · demo</span> : null}<br />
+            {m.summary}
+          </p>
         ))}
       </section>
       <section>

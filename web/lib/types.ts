@@ -49,4 +49,5 @@ export type Metrics = {
 export type Outbox = {
   emails: { to: string; intended_to: string; subject: string; body: string; mode: string }[];
   slack: { text: string; mode: string }[];
+  messages?: { tool: string; action: string; mode: string; summary: string; detail: any; ts: number }[];
 };

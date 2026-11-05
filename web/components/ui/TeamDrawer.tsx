@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api, post, put } from "@/lib/api";
 import type { Org, SkillMatch, Step, Team, Workflow } from "@/lib/types";
 import { ownerOf, peopleOf, type Person } from "@/lib/people";
@@ -16,6 +16,9 @@ export default function TeamDrawer({ org, team, index, selectedRole, onSelectRol
 }) {
   const [goal, setGoal] = useState("");
   const [busy, setBusy] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
+  const touchY = useRef<number | null>(null);
+  useEffect(() => setCollapsed(false), [selectedPerson, selectedRole, inside]);
   const people = useMemo(() => peopleOf(team), [team]);
   const person = inside ? people.find((p) => p.id === selectedPerson) ?? null : null;
   const role = team.roles.find((r) => r.key === (person?.role ?? selectedRole)) ?? null;
@@ -53,7 +56,15 @@ export default function TeamDrawer({ org, team, index, selectedRole, onSelectRol
   };
 
   return (
-    <aside className="drawer block" style={{ ["--team" as any]: color }}>
+    <aside className={`drawer block ${collapsed ? "collapsed" : ""}`} style={{ ["--team" as any]: color }}>
+      <button className="sheet-handle" aria-label={collapsed ? "Expand panel" : "Collapse panel"}
+              onClick={() => setCollapsed(!collapsed)}
+              onTouchStart={(e) => { touchY.current = e.touches[0].clientY; }}
+              onTouchEnd={(e) => {
+                const d = touchY.current == null ? 0 : e.changedTouches[0].clientY - touchY.current;
+                touchY.current = null;
+                if (d > 30) { e.preventDefault(); setCollapsed(true); } else if (d < -30) { e.preventDefault(); setCollapsed(false); }
+              }}><i /></button>
       <header className="drawer-head">
         <div className="swatch" />
         <div className="grow">

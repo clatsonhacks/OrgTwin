@@ -39,6 +39,8 @@ def test_lead_to_cash_end_to_end():
             assert {"sales", "finance", "support", "tech", "marketing"} <= keys
             assert org["source"] == "mock"
 
+            before = (await c.get("/api/metrics")).json()["runs_completed"]  # test files share one database
+            emails_before = len((await c.get("/api/outbox")).json()["emails"])
             run_id = (await c.post("/api/runs")).json()["run_id"]
             run = await _wait_status(c, run_id, {"waiting_approval", "failed"})
             assert run["status"] == "waiting_approval", run["events"][-1]
@@ -58,9 +60,9 @@ def test_lead_to_cash_end_to_end():
             assert score["payload"]["result"]["output"]["tier"] in "ABC"
 
             box = (await c.get("/api/outbox")).json()
-            assert len(box["emails"]) == 3  # outreach, invoice, onboarding
+            assert len(box["emails"]) - emails_before == 3  # outreach, invoice, onboarding
             m = (await c.get("/api/metrics")).json()
-            assert m["runs_completed"] == 1 and m["hours_saved"] > 1
+            assert m["runs_completed"] == before + 1 and m["hours_saved"] > 1
 
             wf = (await c.post("/api/workflows/generate", json={
                 "team_key": "finance", "role_key": "ar-specialist", "goal": "Chase overdue invoices"})).json()

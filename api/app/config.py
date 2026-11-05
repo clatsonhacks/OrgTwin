@@ -33,6 +33,17 @@ class Settings:
     email_redirect_to = _env("EMAIL_REDIRECT_TO")  # safety: send every demo email here
     stripe_secret_key = _env("STRIPE_SECRET_KEY")
     slack_webhook_url = _env("SLACK_WEBHOOK_URL")
+    discord_webhook_url = _env("DISCORD_WEBHOOK_URL")
+    teams_webhook_url = _env("TEAMS_WEBHOOK_URL")
+    telegram_bot_token = _env("TELEGRAM_BOT_TOKEN")
+    telegram_chat_id = _env("TELEGRAM_CHAT_ID")
+    notion_token = _env("NOTION_TOKEN")
+    notion_database_id = _env("NOTION_DATABASE_ID")
+    hubspot_token = _env("HUBSPOT_TOKEN")
+    # Generic webhook step: off (mock) unless enabled; optionally restricted to these hosts
+    webhook_enabled = _env("WEBHOOK_ENABLED").lower() in ("1", "true", "yes")
+    webhook_allowed_hosts = _env("WEBHOOK_ALLOWED_HOSTS")
+    webhook_allow_http = _env("WEBHOOK_ALLOW_HTTP").lower() in ("1", "true", "yes")
 
     # Optional access token for mutating endpoints on a public demo
     app_access_token = _env("APP_ACCESS_TOKEN")

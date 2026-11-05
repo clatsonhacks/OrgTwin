@@ -18,28 +18,41 @@ import json
 import re
 
 from . import llm
+from .connectors import registry
 
-TOOLS = ["sheets", "llm", "email", "approval", "slack", "sandbox", "stripe", "a2a", "mcp", "http"]
-EXEC: dict[str, list[str]] = {
+CORE_EXEC: dict[str, list[str]] = {
     "sheets": ["read_rows", "update_row"],
     "llm": ["write"],
     "email": ["send"],
     "approval": ["request"],
     "slack": ["post"],
 }
-DEFAULT_ACTION = {"sheets": "read_rows", "llm": "write", "email": "send", "approval": "request", "slack": "post"}
+# Connector tools (Discord, Teams, Telegram, Notion, HubSpot, Stripe, webhook) come from the registry.
+EXEC: dict[str, list[str]] = {**CORE_EXEC, **{k: list(c.actions) for k, c in registry.CONNECTORS.items()}}
+TOOLS = list(EXEC) + ["sandbox", "a2a", "mcp"]
+DEFAULT_ACTION = {"sheets": "read_rows", "llm": "write", "email": "send", "approval": "request", "slack": "post",
+                  **{k: next(iter(c.actions)) for k, c in registry.CONNECTORS.items()}}
 TOOL_ALIASES = {
     "excel": "sheets", "spreadsheet": "sheets", "google_sheets": "sheets", "googlesheets": "sheets",
     "sheet": "sheets", "csv": "sheets", "crm": "sheets",
     "gmail": "email", "mail": "email", "smtp": "email", "outlook": "email",
     "ai": "llm", "gpt": "llm", "model": "llm", "write": "llm",
     "human": "approval", "approve": "approval", "review": "approval",
+    "msteams": "teams", "microsoft_teams": "teams", "ms_teams": "teams",
+    "http": "webhook", "zapier": "webhook", "make": "webhook", "n8n": "webhook", "api": "webhook",
+    "invoice": "stripe", "billing": "stripe", "stripe_invoice": "stripe",
+    "hubspot_crm": "hubspot", "notion_page": "notion", "tg": "telegram",
 }
 # Minutes a person would spend on each step (per row for per-row steps) — used for "hours saved".
 MANUAL_MIN = {"read_rows": 2, "update_row": 1, "write": 5, "send": 3, "request": 0, "post": 2}
 
+
+def _manual_min(tool: str, action: str) -> float:
+    a = registry.spec(tool, action)
+    return a.manual_min if a else MANUAL_MIN.get(action, 2)
+
 SCHEMA_PROMPT = """Return ONLY a JSON array of 2-8 steps. Each step:
-{"title": str, "tool": "sheets"|"llm"|"email"|"approval"|"slack", "action": str, "params": object,
+{"title": str, "tool": "sheets"|"llm"|"email"|"approval"|"slack"|CONNECTOR_TOOLS, "action": str, "params": object,
  "per_row": bool, "needs_approval": bool, "description": str}
 Allowed tool/action/params:
 - sheets/read_rows: {"where": {"<column>": "<value>"}, "limit": int}  (read spreadsheet rows; later steps with per_row=true run once per row)
@@ -48,8 +61,12 @@ Allowed tool/action/params:
 - email/send: {"to": "{{row.email}}", "subject": str, "instruction": str}  (the AI writes the body from the instruction)
 - approval/request: {"title": str}
 - slack/post: {"text": str}
+CONNECTOR_LINES
 Use templates like {{row.name}}, {{row.company}}, {{count}}. Columns available in the sheet: COLUMNS.
 Set needs_approval=true on steps that send anything outside the company."""
+SCHEMA_PROMPT = (SCHEMA_PROMPT
+                 .replace("CONNECTOR_TOOLS", "|".join(f'"{k}"' for k in registry.CONNECTORS))
+                 .replace("CONNECTOR_LINES", registry.schema_lines()))
 
 
 def _bool(v) -> bool:
@@ -81,9 +98,15 @@ def normalize_step(s: dict) -> dict:
         params = {"title": str(params.get("title") or s.get("title") or "Please approve")}
     elif tool == "slack":
         params = {"text": str(params.get("text") or s.get("description") or s.get("title") or "")}
+    elif tool in registry.CONNECTORS:
+        if "text" in params or not params:  # models often put the message in description/title
+            params = {"text": params.get("text") or s.get("description") or s.get("title") or "", **params}
+        params = registry.normalize_params(tool, action, params)
     per_row = _bool(s.get("per_row")) and not (tool == "sheets" and action == "read_rows")
+    spec = registry.spec(tool, action)
+    approval = _bool(s.get("needs_approval")) if "needs_approval" in s else bool(spec and spec.external)
     out = {"title": str(s.get("title") or action or tool)[:100], "tool": tool, "action": action,
-           "params": params, "per_row": per_row, "needs_approval": _bool(s.get("needs_approval")),
+           "params": params, "per_row": per_row, "needs_approval": approval,
            "description": str(s.get("description") or "")[:300]}
     fs = s.get("from_skill")
     if isinstance(fs, dict) and isinstance(fs.get("id"), int):
@@ -161,9 +184,31 @@ def plan_from_text(text: str, role_tasks: list[str] | None = None) -> list[dict]
     if any(w in t for w in ("summary", "summarize", "summarise", "report")):
         steps.append({"title": "Write a short summary", "tool": "llm", "action": "write",
                       "params": {"instruction": "Summarise what was done in 3 bullet points.", "save_as": "summary"}})
-    if "slack" in t or "notify" in t or "tell the team" in t:
+    if uses_rows and any(w in t for w in ("hubspot", "crm contact", "sync contacts", "to the crm")):
+        steps.append({"title": "Create / update the contact in HubSpot", "tool": "hubspot", "action": "upsert_contact",
+                      "per_row": True, "params": {}})
+    if uses_rows and ("invoice" in t and any(w in t for w in ("send invoice", "create invoice", "bill", "stripe", "invoice each", "invoice them"))):
+        steps.append({"title": "Create and send the Stripe invoice", "tool": "stripe", "action": "invoice",
+                      "per_row": True, "needs_approval": True, "params": {}})
+    if "notion" in t:
+        steps.append({"title": "Save it as a Notion page", "tool": "notion", "action": "create_page",
+                      "params": {"title": "Report: {{count}} rows", "content": "{{summary}}" if "summary" in t else
+                                 "Processed {{count}} rows."}})
+    done = "Done: processed {{count}} rows." + (" {{summary}}" if "summary" in t else "")
+    chats = [("discord", "post", "Discord"), ("teams", "post", "Microsoft Teams"), ("telegram", "send", "Telegram")]
+    said = False
+    for key, action, label in chats:
+        if key in t or (key == "teams" and "microsoft teams" in t):
+            steps.append({"title": f"Tell the team on {label}", "tool": key, "action": action, "needs_approval": False,
+                          "params": {"text": done}})
+            said = True
+    if any(w in t for w in ("webhook", "zapier", "n8n", "make.com")):
+        m = re.search(r"https://[^\s\"')]+", text or "")
+        steps.append({"title": "Call the webhook", "tool": "webhook", "action": "request", "needs_approval": False,
+                      "params": {"url": m.group(0) if m else "https://", "body": '{"count": "{{count}}", "summary": "{{summary}}"}'}})
+    if "slack" in t or (not said and ("notify" in t or "tell the team" in t)):
         steps.append({"title": "Tell the team on Slack", "tool": "slack", "action": "post",
-                      "params": {"text": "Done: processed {{count}} rows." + (" {{summary}}" if "summary" in t else "")}})
+                      "params": {"text": done}})
     if not steps:
         for task in (role_tasks or ["Do the task"])[:3]:
             steps.append({"title": task, "tool": "llm", "action": "write",
@@ -267,6 +312,6 @@ async def generate(team: dict, role: dict, goal: str, columns: list[str],
 def manual_minutes(steps: list[dict], rows: int) -> float:
     total = 0.0
     for s in steps:
-        m = MANUAL_MIN.get(s.get("action", ""), 2)
+        m = _manual_min(s.get("tool", ""), s.get("action", ""))
         total += m * (rows if s.get("per_row") else 1)
     return total

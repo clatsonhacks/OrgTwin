@@ -10,11 +10,13 @@ import { Activity, ApprovalCard, Departments, Hotbar, RunDetails, SidePanel, Ski
          type Toast } from "@/components/ui/Hud";
 import SkillRecorder from "@/components/ui/SkillRecorder";
 import OrgGraph from "@/components/ui/OrgGraph";
+import ConnectorsPanel from "@/components/ui/Connectors";
+import { teamColor } from "@/components/world/layout";
 import { ownerOf, type Person } from "@/lib/people";
 
 const World = dynamic(() => import("@/components/world/World"), { ssr: false });
 
-type Panel = "team" | "run" | "activity" | "skills" | null;
+type Panel = "team" | "run" | "activity" | "skills" | "connectors" | null;
 
 export default function Home() {
   const [status, setStatus] = useState<Status | null>(null);
@@ -99,7 +101,7 @@ export default function Home() {
         case "run.failed":
           setActiveTeam(null); setActivePerson(null); refresh(); toast(`Run failed: ${p.error}`, "bad"); break;
         case "step.completed":
-          if (["email", "slack"].includes(p.tool) || p.step === "send_invoice") api<Outbox>("/api/outbox").then(setOutbox);
+          if (p.tool !== "sheets" && p.tool !== "llm") api<Outbox>("/api/outbox").then(setOutbox);
           break;
         case "org.generated":
           setInside(null); setSelectedPerson(null); refresh(); break;
@@ -117,6 +119,7 @@ export default function Home() {
   }, [refresh, toast]);
 
   const hero = workflows.find((w) => w.kind === "hero");
+  const activityCount = outbox.emails.length + (outbox.messages?.length ?? 0);
   const view = useRunView(events, runId);
   const running = runId != null && !view.finished && Object.keys(view.st).length > 0;
   const pending = approvals.filter((a) => a.status === "pending");
@@ -189,14 +192,33 @@ export default function Home() {
         <>
           <Departments org={org} selected={selectedTeam} onSelect={selectTeam} onGraph={() => setShowGraph(true)} />
           <div className="fabs">
-            <button className="btn fab-graph" onClick={() => setShowGraph(true)}>🕸</button>
             <button className={`btn ${panel === "skills" ? "btn-on" : ""}`} onClick={() => setPanel(panel === "skills" ? null : "skills")}>
-              📘 Skills {skills.length > 0 && <span className="count count-skill">{skills.length}</span>}
+              📘<span className="fab-label"> Skills</span> {skills.length > 0 && <span className="count count-skill">{skills.length}</span>}
             </button>
             <button className={`btn ${panel === "activity" ? "btn-on" : ""}`} onClick={() => setPanel(panel === "activity" ? null : "activity")}>
-              📜 Activity {outbox.emails.length > 0 && <span className="count">{outbox.emails.length}</span>}
+              📜<span className="fab-label"> Activity</span> {activityCount > 0 && <span className="count">{activityCount}</span>}
             </button>
+            <button className={`btn ${panel === "connectors" ? "btn-on" : ""}`} onClick={() => setPanel(panel === "connectors" ? null : "connectors")}
+                    aria-label="Connectors">🔌<span className="fab-label"> Connectors</span></button>
           </div>
+          {/* phones: one swipeable row with the panels and every department */}
+          <nav className="mdock" aria-label="Departments and panels">
+            <button className={`chip-btn ${showGraph ? "on" : ""}`} onClick={() => setShowGraph(true)}>🕸 Graph</button>
+            <button className={`chip-btn ${panel === "skills" ? "on" : ""}`} onClick={() => setPanel(panel === "skills" ? null : "skills")}>
+              📘{skills.length > 0 && <span className="count count-skill">{skills.length}</span>}
+            </button>
+            <button className={`chip-btn ${panel === "activity" ? "on" : ""}`} onClick={() => setPanel(panel === "activity" ? null : "activity")}>
+              📜{activityCount > 0 && <span className="count">{activityCount}</span>}
+            </button>
+            <button className={`chip-btn ${panel === "connectors" ? "on" : ""}`} onClick={() => setPanel(panel === "connectors" ? null : "connectors")}>🔌</button>
+            <span className="mdock-sep" aria-hidden />
+            {org.teams.map((t, i) => (
+              <button key={t.key} className={`chip-btn dept ${selectedTeam === t.key ? "on" : ""}`} style={{ ["--team" as any]: teamColor(t.key, i) }}
+                      onClick={() => (selectedTeam === t.key ? enter(t.key) : selectTeam(t.key))}>
+                <i />{t.name}{inside === t.key && " · inside"}
+              </button>
+            ))}
+          </nav>
           {panel === "team" && team && (
             <TeamDrawer org={org} team={team} index={teamIdx} inside={inside === team.key} onEnter={() => enter(team.key)} onExit={exit}
                         selectedPerson={selectedPerson} onSelectPerson={selectPerson} selectedRole={selectedRole} onSelectRole={setSelectedRole}
@@ -211,6 +233,7 @@ export default function Home() {
                             onOpenTeam={(t, r, person) => { if (person) { enter(t); selectPerson(person); } else { setSelectedTeam(t); setSelectedRole(r); setPanel("team"); } }} />
             </SidePanel>
           )}
+          {panel === "connectors" && <SidePanel title="Connectors" onClose={() => setPanel(null)}><ConnectorsPanel onError={(m) => toast(m, "bad")} /></SidePanel>}
           {panel === "activity" && <SidePanel title="Activity" onClose={() => setPanel(null)}><Activity outbox={outbox} events={events} /></SidePanel>}
 
           <div className="bottom">
@@ -222,7 +245,7 @@ export default function Home() {
             <div className="hint block">Click a building, then click it again to step inside · scroll to zoom · drag to move</div>
           )}
           {inside && !selectedPerson && (
-            <div className="hint block">Click anyone at a desk to see their role and give them a skill</div>
+            <div className="hint block">Tap anyone at a desk to see their role and give them a skill</div>
           )}
         </>
       )}
