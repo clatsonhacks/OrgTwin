@@ -11,6 +11,8 @@ import { Activity, ApprovalCard, Departments, Hotbar, RunDetails, SidePanel, Ski
 import SkillRecorder from "@/components/ui/SkillRecorder";
 import OrgGraph from "@/components/ui/OrgGraph";
 import ConnectorsPanel from "@/components/ui/Connectors";
+import FlowBuilder from "@/components/ui/FlowBuilder";
+import type { RunView } from "@/components/ui/Hud";
 import { teamColor } from "@/components/world/layout";
 import { ownerOf, type Person } from "@/lib/people";
 
@@ -42,6 +44,8 @@ export default function Home() {
   const [activePerson, setActivePerson] = useState<string | null>(null);
   const [showGraph, setShowGraph] = useState(false);
   const [graphVersion, setGraphVersion] = useState(0);
+  const [showFlows, setShowFlows] = useState(false);
+  const [barWfId, setBarWfId] = useState<number | null>(null); // workflow on the bottom bar (null = lead-to-cash)
   const runIdRef = useRef<number | null>(null);
   runIdRef.current = runId;
 
@@ -119,9 +123,25 @@ export default function Home() {
   }, [refresh, toast]);
 
   const hero = workflows.find((w) => w.kind === "hero");
+  const teamName = useCallback((k?: string) => org?.teams.find((t) => t.key === k)?.name ?? cap(k), [org]);
   const activityCount = outbox.emails.length + (outbox.messages?.length ?? 0);
   const view = useRunView(events, runId);
   const running = runId != null && !view.finished && Object.keys(view.st).length > 0;
+  // the bottom bar: lead-to-cash by default, or the workflow you picked / designed / ran last
+  const barWf = workflows.find((w) => w.id === barWfId && w.kind !== "hero" && w.executable) ?? null;
+  const barSteps = barWf ? barWf.steps.map((st, i) => ({ ...st, key: `s${i}`, team: st.team ?? barWf.team_key, to: st.params?.to }))
+                         : hero?.steps ?? [];
+  const viewIsBar = barWf ? view.workflowId === barWf.id : (view.kind ?? "hero") === "hero";
+  const emptyView: RunView = { st: {}, results: {} };
+  const barView = running || viewIsBar ? view : emptyView;
+  const barChain = barWf ? (barWf.teams ?? [barWf.team_key]).map((k) => teamName(k)).join(" → ") : "";
+  const barCaption = barWf
+    ? `${barWf.kind === "flow" ? "🔀" : barWf.kind === "skill" ? "📘" : "✦"} ${barWf.name}${barChain ? ` · ${barChain}` : ""}`
+    : "Lead-to-cash · Sales → Finance → Customer Success, run by agents";
+  const barChoices = [{ id: null, label: "⚡ Lead-to-cash" },
+    ...workflows.filter((w) => w.kind !== "hero" && w.executable)
+      .sort((a, b) => Number(b.kind === "flow") - Number(a.kind === "flow") || b.id - a.id)
+      .map((w) => ({ id: w.id, label: `${w.kind === "flow" ? "🔀" : w.kind === "skill" ? "📘" : "✦"} ${w.name}`.slice(0, 60) }))];
   const pending = approvals.filter((a) => a.status === "pending");
   const approvalTeams = useMemo(() => pending.map((a) => a.team_key), [pending]);
   const teamIdx = org?.teams.findIndex((t) => t.key === selectedTeam) ?? -1;
@@ -165,7 +185,8 @@ export default function Home() {
     try {
       const r = await post<{ run_id: number }>(`/api/workflows/${id}/run`);
       const wf = workflows.find((w) => w.id === id);
-      setRunId(r.run_id);
+      setRunId(r.run_id); setBarWfId(id);
+      if (wf?.kind === "flow") setShowFlows(false); // watch the agents hand the work across the campus
       if (wf && inside === wf.team_key) setActivePerson(ownerOf(wf)); // stay inside and watch them work
       else { selectTeam(null); setPanel(null); }
     } catch (e: any) { toast(e.message, "bad"); } finally { setBusy(false); }
@@ -191,6 +212,8 @@ export default function Home() {
       {org && !showStart && (
         <>
           <Departments org={org} selected={selectedTeam} onSelect={selectTeam} onGraph={() => setShowGraph(true)} />
+          <button className={`btn btn-flow fab-flow ${showFlows ? "btn-on" : ""}`} onClick={() => setShowFlows(!showFlows)}
+                  aria-label="New cross-team workflow">🔀 New workflow <small>across teams</small></button>
           <div className="fabs">
             <button className={`btn ${panel === "skills" ? "btn-on" : ""}`} onClick={() => setPanel(panel === "skills" ? null : "skills")}>
               📘<span className="fab-label"> Skills</span> {skills.length > 0 && <span className="count count-skill">{skills.length}</span>}
@@ -203,6 +226,7 @@ export default function Home() {
           </div>
           {/* phones: one swipeable row with the panels and every department */}
           <nav className="mdock" aria-label="Departments and panels">
+            <button className={`chip-btn chip-flow ${showFlows ? "on" : ""}`} onClick={() => setShowFlows(!showFlows)}>🔀 New workflow</button>
             <button className={`chip-btn ${showGraph ? "on" : ""}`} onClick={() => setShowGraph(true)}>🕸 Graph</button>
             <button className={`chip-btn ${panel === "skills" ? "on" : ""}`} onClick={() => setPanel(panel === "skills" ? null : "skills")}>
               📘{skills.length > 0 && <span className="count count-skill">{skills.length}</span>}
@@ -226,7 +250,7 @@ export default function Home() {
                         onClose={() => selectTeam(null)} onRunHero={startRun} onRunWorkflow={runWorkflow}
                         onRecord={(person) => { const r = person?.role ?? selectedRole; if (r) setRecorder({ team: team.key, role: r, person }); }} />
           )}
-          {panel === "run" && <SidePanel title="Run details" onClose={() => setPanel(null)}><RunDetails view={view} /></SidePanel>}
+          {panel === "run" && <SidePanel title="Run details" onClose={() => setPanel(null)}><RunDetails view={view} teamName={teamName} /></SidePanel>}
           {panel === "skills" && (
             <SidePanel title="Skill library" onClose={() => setPanel(null)}>
               <SkillLibrary org={org} workflows={workflows} onRun={runWorkflow}
@@ -238,8 +262,11 @@ export default function Home() {
 
           <div className="bottom">
             {pending.map((a) => <ApprovalCard key={a.id} a={a} onDecide={(ok) => decide(a, ok)} />)}
-            {hero && <Hotbar steps={view.steps ?? hero.steps} view={view} running={running} busy={busy} canRun={!!org}
-                             onRun={startRun} onDetails={() => setPanel("run")} />}
+            {hero && <Hotbar steps={(running || viewIsBar) && view.steps ? view.steps : barSteps} view={barView} running={running}
+                             busy={busy} canRun={!!org} onRun={() => (barWf ? runWorkflow(barWf.id) : startRun())}
+                             onDetails={() => setPanel("run")} label={barWf ? barWf.name : "lead-to-cash"}
+                             idleCaption={barCaption} choices={barChoices} selected={barWf?.id ?? null} onPick={setBarWfId}
+                             teamName={teamName} />}
           </div>
           {!selectedTeam && !running && !view.finished && (
             <div className="hint block">Click a building, then click it again to step inside · scroll to zoom · drag to move</div>
@@ -258,6 +285,12 @@ export default function Home() {
         <SkillRecorder team={recTeam} teamIndex={recTeamIdx} role={recRole} person={recorder.person} onError={(m) => toast(m, "bad")}
                        onClose={() => setRecorder(null)}
                        onSaved={(w) => { setRecorder(null); refresh(); toast(`📘 ${recorder.person?.name ?? recRole.name} learned “${w.name}”`, "ok"); }} />
+      )}
+      {showFlows && org && !showStart && (
+        <FlowBuilder org={org} workflows={workflows} onClose={() => setShowFlows(false)} onChanged={refresh}
+                     onError={(m) => toast(m, "bad")} onRun={runWorkflow}
+                     onCreated={(w) => { setBarWfId(w.id); refresh();
+                       toast(`🔀 “${w.name}” is ready · ${(w.teams ?? []).map((k) => teamName(k)).join(" → ")}`, "ok"); }} />
       )}
       {showGraph && org && (
         <OrgGraph org={org} version={graphVersion} onClose={() => setShowGraph(false)}

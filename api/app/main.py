@@ -42,8 +42,11 @@ def _latest_org(s) -> Org | None:
 
 
 def _wf_dict(w: Workflow) -> dict:
+    teams = list(dict.fromkeys([s.get("team") or w.team_key for s in (w.steps or []) if s.get("tool") != "a2a"]
+                               + [s["params"]["to"] for s in (w.steps or []) if s.get("tool") == "a2a"
+                                  and s.get("params", {}).get("to")])) or [w.team_key]
     return {"id": w.id, "org_id": w.org_id, "team_key": w.team_key, "role_key": w.role_key, "name": w.name,
-            "goal": w.goal, "kind": w.kind, "steps": w.steps, "meta": w.meta or {},
+            "goal": w.goal, "kind": w.kind, "steps": w.steps, "meta": w.meta or {}, "teams": teams,
             "executable": w.kind == "hero" or workflows.is_executable(w.steps or [])}
 
 
@@ -172,6 +175,56 @@ async def generate_workflow(body: WorkflowGenIn):
     return out
 
 
+class FlowIn(BaseModel):
+    goal: str = Field(min_length=3, max_length=1500)
+    name: str = Field(default="", max_length=120)
+
+
+@app.post("/api/flows/design", dependencies=[Depends(require_token)])
+async def design_flow(body: FlowIn):
+    """Design a workflow that runs across departments (each step done by its team's agent, with handoffs)."""
+    with SessionLocal() as s:
+        org = _latest_org(s)
+    if not org:
+        raise HTTPException(400, "generate an org first")
+    org_d = _org_dict(org)
+    # skills anywhere in the org may be reused; rank them against the goal
+    every = _skills(org.id)
+    full = {w["id"]: w for w in every}
+    cands = {c["id"]: c for t in org_d["teams"] for r in t["roles"][:1]
+             for c in graph.relevant_skills(body.goal, t["key"], r["key"], None, every)}
+    ranked = sorted(cands.values(), key=lambda c: -c["score"])[:5]
+    out = await workflows.design_flow(org_d, body.goal, await sheets.columns(), [full[c["id"]] for c in ranked])
+    steps = out["steps"]
+    if not steps:
+        raise HTTPException(502, "could not design a workflow for that goal; try describing the steps")
+    start = next((st.get("team") for st in steps if st.get("team")), org_d["teams"][0]["key"])
+    team = next(t for t in org_d["teams"] if t["key"] == start)
+    meta = {"designed_by": out.get("model") or "rule-based fallback", "problem": out["problem"]}
+    if out["used"]:
+        meta["uses_skills"] = out["used"]
+    with SessionLocal() as s:
+        w = Workflow(org_id=org.id, team_key=team["key"], role_key=team["roles"][0]["key"],
+                     name=(body.name or out["name"])[:120], goal=body.goal, kind="flow", steps=steps, meta=meta)
+        s.add(w)
+        s.commit()
+        res = {**_wf_dict(w), "mocked": out["mocked"]}
+    bus.emit("workflow.created", {"workflow_id": res["id"], "team": team["key"], "teams": res["teams"],
+                                  "reused": [full[i]["name"] for i in out["used"] if i in full]})
+    return res
+
+
+@app.get("/api/flows/suggest")
+async def suggest_flows():
+    """A few cross-department workflow ideas for the current company."""
+    with SessionLocal() as s:
+        org = _latest_org(s)
+    if not org:
+        raise HTTPException(400, "generate an org first")
+    ideas, offline = await workflows.suggest_flows(_org_dict(org))
+    return {"ideas": ideas, "offline": offline}
+
+
 def _skills(org_id: int) -> list[dict]:
     with SessionLocal() as s:
         q = select(Workflow).where(Workflow.org_id == org_id, Workflow.kind == "skill").order_by(Workflow.id)
@@ -205,7 +258,12 @@ def update_workflow(wf_id: int, body: WorkflowUpdateIn):
             raise HTTPException(404, "workflow not found")
         if w.kind == "hero":
             raise HTTPException(400, "the hero workflow is fixed in this version")
-        w.steps = workflows.normalize(body.steps)
+        steps = workflows.normalize(body.steps)
+        if w.kind == "flow":  # keep teams valid and handoffs where the team changes
+            org = s.get(Org, w.org_id)
+            steps = workflows.link_teams(steps, org.data["teams"], w.team_key)
+            w.team_key = next((x.get("team") for x in steps if x.get("team")), w.team_key)
+        w.steps = steps
         if body.name:
             w.name = body.name[:120]
         s.commit()
@@ -339,8 +397,8 @@ async def run_workflow(wf_id: int):
         s.add(run)
         s.commit()
         run_id, wf = run.id, _wf_dict(w)
-    team_name = next((t["name"] for t in org.data["teams"] if t["key"] == wf["team_key"]), wf["team_key"])
-    t = asyncio.create_task(engine.run_workflow(run_id, wf, team_name))
+    team_names = {t["key"]: t["name"] for t in org.data["teams"]}
+    t = asyncio.create_task(engine.run_workflow(run_id, wf, team_names))
     _tasks.add(t)
     t.add_done_callback(_tasks.discard)
     return {"run_id": run_id}

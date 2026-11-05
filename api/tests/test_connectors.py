@@ -7,7 +7,8 @@ os.environ["DATABASE_URL"] = f"sqlite:///{tempfile.mkdtemp()}/test.db"
 os.environ["RUNNER"] = "local"
 os.environ["STEP_DELAY_S"] = "0"
 for k in ("VULTR_INFERENCE_API_KEY", "STRIPE_SECRET_KEY", "SLACK_WEBHOOK_URL", "SMTP_HOST", "GOOGLE_SHEET_ID",
-          "DISCORD_WEBHOOK_URL", "TEAMS_WEBHOOK_URL", "TELEGRAM_BOT_TOKEN", "NOTION_TOKEN", "HUBSPOT_TOKEN", "WEBHOOK_ENABLED"):
+          "DISCORD_WEBHOOK_URL", "TEAMS_WEBHOOK_URL", "TELEGRAM_BOT_TOKEN", "NOTION_TOKEN", "HUBSPOT_TOKEN", "WEBHOOK_ENABLED",
+          "TAVILY_API_KEY", "BRAVE_SEARCH_API_KEY"):
     os.environ.pop(k, None)
 
 import httpx  # noqa: E402
@@ -29,7 +30,8 @@ def run(coro):
 def test_catalog_is_all_mock_without_credentials():
     cat = {c["key"]: c for c in registry.catalog()}
     assert {"discord", "teams", "telegram", "notion", "hubspot", "stripe", "webhook"} <= set(cat)
-    assert all(c["mode"] == "mock" for c in cat.values())
+    assert all(c["mode"] == "mock" for k, c in cat.items() if k != "web")
+    assert cat["web"]["mode"] == "basic"  # web search works without a key (DuckDuckGo + Wikipedia)
     assert cat["hubspot"]["actions"][0]["params"][0] == {"name": "email", "default": "{{row.email}}", "label": "email", "long": False}
 
 

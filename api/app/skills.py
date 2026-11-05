@@ -7,7 +7,7 @@
    always says which path ran.
 Frames are processed in memory only and never stored; only the text observations are kept.
 """
-import json
+
 
 from . import llm, workflows
 
@@ -16,12 +16,17 @@ BATCH = 4
 
 OBSERVE_PROMPT = """These are consecutive screenshots (frames {start}-{end}) of a person doing a task at work.
 For EACH frame, write one line: "Frame N: <app/site> — <what the person is doing>". Be concrete: name the
-spreadsheet, the column headers you can read, filters or values, the email recipient/subject, buttons
-clicked. If a frame shows nothing new, say "no change". Do not guess beyond what is visible."""
+spreadsheet, the column headers you can read, filters or values, the email recipient/subject, what they type
+into a search box, the website they open, buttons clicked. If a frame shows nothing new, say "no change".
+If a frame only shows the recording tool itself (OrgTwin, a screen-share or microphone permission prompt),
+write "Frame N: recorder" and nothing else — never repeat its example or placeholder text.
+Do not guess beyond what is visible."""
 
 PLAN_SYSTEM = """You turn a recorded demonstration of a work task into an automation for an AI agent.
-You get what was seen on screen (frame by frame) and what the person said. Reproduce the SAME task in a
-general way so it works on every matching row next time, not just the rows in the video.
+You get what was seen on screen (frame by frame) and what the person said. Reproduce the SAME task the person
+actually did, in a general way so it works next time, and nothing else. Base it on the evidence: do not add
+spreadsheet, email or status steps unless the person did them. Ignore the recording tool itself (OrgTwin,
+permission prompts) and any example text shown in it.
 """ + workflows.SCHEMA_PROMPT
 
 
@@ -39,8 +44,15 @@ async def observe(frames: list[str]) -> tuple[list[str], str | None]:
             return [], None
         model = res.model
         lines = [ln.strip(" -•\t") for ln in res.text.splitlines() if ln.strip()]
-        observations += [ln for ln in lines if "no change" not in ln.lower()]
+        observations += [ln for ln in lines if not _noise(ln)]
     return observations[:60], model
+
+
+def _noise(line: str) -> bool:
+    """Frames that add nothing: unchanged screens and the recorder's own UI (its hint text is not the task)."""
+    low = line.lower()
+    return ("no change" in low or low.rstrip(". ").endswith("recorder") or "orgtwin" in low
+            or "localhost:3000" in low or "recording a skill" in low)
 
 
 def _sample(frames: list[str], n: int) -> list[str]:
@@ -64,21 +76,19 @@ async def analyze(team: dict, role: dict, transcript: str, frames: list[str], co
         evidence = "(no narration and no vision model available)"
 
     fallback_text = narration + " " + " ".join(observations)
-    res = await llm.complete(
+    data, res, problem = await llm.complete_json(
         PLAN_SYSTEM.replace("COLUMNS", ", ".join(columns)),
-        f"Team: {team['name']}\nRole: {role['name']}\n{evidence}\n"
-        'Also include a short name for this skill as the "title" of the first step if obvious.',
-        fallback=lambda: json.dumps(workflows.plan_from_text(fallback_text, role.get("tasks"))),
-        temperature=0.2)
-    mocked = res.mocked
-    try:
-        steps = workflows.normalize(llm.extract_json(res.text))
-    except Exception:
-        steps, mocked = workflows.plan_from_text(fallback_text, role.get("tasks")), True
-    if not steps:
-        steps, mocked = workflows.plan_from_text(fallback_text, role.get("tasks")), True
+        f"Team: {team['name']}\nRole: {role['name']}\n{evidence}",
+        fallback=lambda: None)
+    steps = workflows.normalize(data) if not problem else []
+    if not problem and not steps:
+        problem = "the AI returned no usable steps"
+    if problem:
+        steps = workflows.plan_from_text(fallback_text, role.get("tasks"))
+    mocked = bool(problem)
+    ai_name = data.get("name") if isinstance(data, dict) and isinstance(data.get("name"), str) else ""
 
-    name = title.strip() or _name_from(steps, narration)
+    name = title.strip() or ai_name.strip() or _name_from(steps, narration)
     how = ("vision + narration" if vision and narration else "vision only" if vision
            else "narration only" if narration else "nothing to learn from")
     return {
@@ -89,14 +99,17 @@ async def analyze(team: dict, role: dict, transcript: str, frames: list[str], co
             "source": "recording",
             "how": how,
             "vision_model": vision,
-            "planner": "demo planner (no inference key)" if mocked else res.model,
+            "planner": f"rule-based fallback ({problem})" if mocked else res.model,
             "frames_received": len(frames),
             "frames_used": min(len(frames), MAX_FRAMES) if vision else 0,
             "observations": observations,
             "transcript": narration[:4000],
-            "note": None if vision else ("No vision model available on Vultr Serverless Inference for this key — "
-                                         "the workflow was learned from the narration only."
-                                         if not mocked else "Demo mode — set VULTR_INFERENCE_API_KEY to use Vultr models."),
+            "note": ("Demo mode — set VULTR_INFERENCE_API_KEY to use Vultr models." if problem == "no inference key"
+                     else f"The AI planner failed ({problem}), so a simple rule-based planner wrote these steps — "
+                          "check them before saving." if mocked
+                     else None if vision
+                     else "No vision model available on Vultr Serverless Inference for this key — "
+                          "the workflow was learned from the narration only."),
         },
     }
 

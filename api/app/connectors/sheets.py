@@ -20,6 +20,11 @@ _MOCK_LEADS = [
     {"id": "L-103", "name": "Priya Nair", "company": "Kite Logistics (demo)", "email": "priya@example.com",
      "notes": "Referral from partner, urgent: replacing legacy tool this quarter",
      "deal_value": "9600", "status": "New"},
+    # a won deal and an overdue invoice, so the sample cross-team workflows have rows to work on
+    {"id": "L-104", "name": "Leo Martins", "company": "Harbor Freight Co (demo)", "email": "leo@example.com",
+     "notes": "Signed the annual plan last week, wants to start onboarding", "deal_value": "7200", "status": "Won"},
+    {"id": "L-105", "name": "Aisha Bello", "company": "Greenline Grocers (demo)", "email": "aisha@example.com",
+     "notes": "Invoice INV-2207 is 21 days overdue, usually pays on reminder", "deal_value": "3100", "status": "Overdue"},
 ]
 _mock_state = [dict(x) for x in _MOCK_LEADS]
 

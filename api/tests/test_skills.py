@@ -64,7 +64,7 @@ def test_record_save_run():
                 await asyncio.sleep(0.02)
             assert run["status"] == "completed", run["events"][-1]
             assert len(email.outbox) == 3 and {m["to"] for m in email.outbox} == {"dana@example.com", "sam@example.com", "priya@example.com"}
-            assert all(r["status"] == "Contacted" for r in await sheets.list_leads())
+            assert all(r["status"] == "Contacted" for r in await sheets.list_leads() if r["id"] in ("L-101", "L-102", "L-103"))
             assert run["context"]["hours_saved"] > 0
     asyncio.run(go())
 

@@ -29,8 +29,10 @@ export type SkillMatch = {
 };
 export type Workflow = {
   id: number; team_key: string; role_key: string; name: string; goal: string;
-  kind: "hero" | "draft" | "skill"; steps: Step[]; mocked?: boolean;
+  kind: "hero" | "draft" | "skill" | "flow"; steps: Step[]; mocked?: boolean;
   meta?: Record<string, any>; executable?: boolean;
+  /** departments involved, in order (cross-team workflows have several) */
+  teams?: string[];
 };
 export type SkillAnalysis = {
   name: string; steps: Step[]; executable: boolean;

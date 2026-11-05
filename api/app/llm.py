@@ -82,21 +82,47 @@ def _headers() -> dict:
 
 
 async def complete(system: str, user: str, fallback: Callable[[], str],
-                   temperature: float = 0.4, max_tokens: int = 4000) -> LLMResult:
+                   temperature: float = 0.4, max_tokens: int = 4000, json_mode: bool = False) -> LLMResult:
+    """One chat completion. json_mode asks the server for a single JSON object (OpenAI response_format);
+    if the server refuses that parameter, the call is retried without it."""
     if not settings.inference_api_key:
         return LLMResult(fallback(), mocked=True, model="mock")
-    async with httpx.AsyncClient(timeout=90) as client:
+    async with httpx.AsyncClient(timeout=120) as client:
         model = await _model(client)
-        r = await client.post(
-            f"{settings.inference_base_url}/chat/completions",
-            headers=_headers(),
-            json={"model": model, "temperature": temperature, "max_tokens": max_tokens, **_reasoning(),
-                  "messages": [{"role": "system", "content": system},
-                               {"role": "user", "content": user}]},
-        )
+        body = {"model": model, "temperature": temperature, "max_tokens": max_tokens, **_reasoning(),
+                "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
+        if json_mode:
+            body["response_format"] = {"type": "json_object"}
+        r = await client.post(f"{settings.inference_base_url}/chat/completions", headers=_headers(), json=body)
+        if json_mode and r.status_code == 400:
+            body.pop("response_format")
+            r = await client.post(f"{settings.inference_base_url}/chat/completions", headers=_headers(), json=body)
         r.raise_for_status()
-        text = r.json()["choices"][0]["message"]["content"]
+        text = r.json()["choices"][0]["message"].get("content") or ""
         return LLMResult(text, mocked=False, model=model)
+
+
+async def complete_json(system: str, user: str, fallback: Callable[[], Any], temperature: float = 0.2,
+                        max_tokens: int = 6000) -> tuple[Any, LLMResult, str | None]:
+    """Ask for JSON and parse it. Retries once when the reply is not valid JSON.
+    Returns (data, result, problem): problem is None on success, else why the fallback was used."""
+    if not settings.inference_api_key:
+        return fallback(), LLMResult("", mocked=True, model="mock"), "no inference key"
+    problem = None
+    for attempt in range(2):
+        hint = "" if attempt == 0 else ("\n\nYour previous reply was not valid JSON. Reply with ONLY the JSON object, "
+                                        "no prose, no code fences.")
+        try:
+            res = await complete(system + hint, user, fallback=lambda: "", temperature=temperature,
+                                 max_tokens=max_tokens, json_mode=True)
+        except httpx.HTTPError as e:
+            problem = f"inference call failed ({type(e).__name__})"
+            continue
+        try:
+            return extract_json(res.text), res, None
+        except (ValueError, json.JSONDecodeError):
+            problem = "the AI reply was not valid JSON"
+    return fallback(), LLMResult("", mocked=True, model="fallback"), problem
 
 
 def extract_json(text: str) -> Any:

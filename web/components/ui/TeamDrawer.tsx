@@ -23,7 +23,8 @@ export default function TeamDrawer({ org, team, index, selectedRole, onSelectRol
   const person = inside ? people.find((p) => p.id === selectedPerson) ?? null : null;
   const role = team.roles.find((r) => r.key === (person?.role ?? selectedRole)) ?? null;
   const color = teamColor(team.key, index);
-  const teamWfs = workflows.filter((w) => w.team_key === team.key);
+  // this team's own workflows, plus cross-team workflows it takes part in
+  const teamWfs = workflows.filter((w) => w.team_key === team.key || (w.kind === "flow" && w.teams?.includes(team.key)));
   const roleSkills = (k: string) => workflows.filter((w) => w.kind === "skill" && w.team_key === team.key && w.role_key === k).length;
   const personWfs = (id: string) => teamWfs.filter((w) => ownerOf(w) === id);
   const nameOf = (id: string) => people.find((p) => p.id === id)?.name ?? id;
@@ -168,6 +169,7 @@ export default function TeamDrawer({ org, team, index, selectedRole, onSelectRol
 
       {(person ? personWfs(person.id) : teamWfs).map((w) => (
         <WorkflowCard key={w.id} wf={w} onSaved={onChanged} onError={onError} owner={inside && !person ? nameOf(ownerOf(w)) : undefined}
+                      teams={w.kind === "flow" ? org.teams : undefined}
                       onRun={() => (w.kind === "hero" ? onRunHero() : onRunWorkflow(w.id))} />
       ))}
     </aside>
@@ -229,8 +231,10 @@ function PersonCard({ org, team, person, tasks, workflows, owned, onChanged, onE
   );
 }
 
-export function WorkflowCard({ wf, onSaved, onError, onRun, defaultOpen, owner }: {
+export function WorkflowCard({ wf, onSaved, onError, onRun, defaultOpen, owner, teams }: {
   wf: Workflow; onSaved: () => void; onError: (m: string) => void; onRun: () => void; defaultOpen?: boolean; owner?: string;
+  /** the org's teams: set for cross-team workflows so steps show and edit their department */
+  teams?: Team[];
 }) {
   const [steps, setSteps] = useState<Step[]>(wf.steps);
   const [dirty, setDirty] = useState(false);
@@ -245,7 +249,8 @@ export function WorkflowCard({ wf, onSaved, onError, onRun, defaultOpen, owner }
   const save = async () => {
     try { await put(`/api/workflows/${wf.id}`, { steps }); setDirty(false); setEditing(false); onSaved(); } catch (e: any) { onError(e.message); }
   };
-  const tag = wf.kind === "hero" ? ["runs live", "tag-go"] : wf.kind === "skill" ? ["📘 recorded skill", "tag-skill"] : ["designed", ""];
+  const tag = wf.kind === "hero" ? ["runs live", "tag-go"] : wf.kind === "skill" ? ["📘 recorded skill", "tag-skill"]
+    : wf.kind === "flow" ? [`🔀 ${wf.teams?.length ?? 1} teams`, "tag-flow"] : ["designed", ""];
   const reused = Array.from(new Map(wf.steps.filter((s) => s.from_skill).map((s) => [s.from_skill!.id, s.from_skill!.name])).values());
   return (
     <section className="wf">
@@ -258,14 +263,18 @@ export function WorkflowCard({ wf, onSaved, onError, onRun, defaultOpen, owner }
         <>
           {wf.kind === "skill" && wf.meta?.how && <p className="muted">Learned from a recording ({wf.meta.how}).</p>}
           {reused.length > 0 && <p className="muted">♻ Built on existing skill{reused.length > 1 ? "s" : ""}: {reused.map((n) => `📘 ${n}`).join(", ")}</p>}
-          {editing ? <StepEditor steps={steps} onChange={(s) => { setSteps(s); setDirty(true); }} /> : <StepList steps={steps} />}
+          {wf.kind === "flow" && teams && wf.teams && wf.teams.length > 1 && (
+            <p className="muted">{wf.teams.map((k) => teams.find((t) => t.key === k)?.name ?? k).join(" → ")}</p>
+          )}
+          {editing ? <StepEditor steps={steps} teams={teams} onChange={(s) => { setSteps(s); setDirty(true); }} />
+                   : <StepList steps={steps} teams={teams} />}
           {preview && preview.rows.length > 0 && !editing && (
             <p className="preview-rows">Next run touches <b>{preview.rows.length}</b> row(s): {preview.rows.slice(0, 4).map((r) => r.label).join(", ")}{preview.rows.length > 4 ? "…" : ""}</p>
           )}
           <div className="row">
             {wf.kind !== "hero" && !editing && <button className="btn" onClick={() => setEditing(true)}>Edit</button>}
             {editing && <>
-              <button className="btn" onClick={() => { setSteps([...steps, newStep()]); setDirty(true); }}>+ Step</button>
+              <button className="btn" onClick={() => { setSteps([...steps, newStep(teams ? [...steps].reverse().find((x) => x.team)?.team ?? teams[0]?.key : undefined)]); setDirty(true); }}>+ Step</button>
               <button className="btn" onClick={() => { setSteps(wf.steps); setDirty(false); setEditing(false); }}>Cancel</button>
               <button className="btn btn-go" disabled={!dirty} onClick={save}>Save</button>
             </>}

@@ -5,7 +5,7 @@ import { api } from "./api";
 export type ConnectorParam = { name: string; default: string; label: string; long: boolean };
 export type ConnectorAction = { key: string; label: string; doc: string; external: boolean; params: ConnectorParam[] };
 export type Connector = {
-  key: string; name: string; icon: string; category: string; mode: "live" | "mock";
+  key: string; name: string; icon: string; category: string; mode: "live" | "mock" | string;
   env: string[]; setup: string; actions: ConnectorAction[]; core?: boolean;
 };
 

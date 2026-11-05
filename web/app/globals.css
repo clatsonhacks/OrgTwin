@@ -429,3 +429,50 @@ body { overscroll-behavior: none; }
   .modal { border-radius: 16px 16px 0 0; max-height: 92vh; }
 }
 @media (max-width: 1680px) { .fab-label { display: none; } }
+
+/* ---------- cross-team workflow builder (slides in from the left) ---------- */
+@media (min-width: 901px) {
+  .drawer.leftsheet { left: 16px; right: auto; top: 96px; bottom: 150px; width: 420px; z-index: 115;
+                      animation: slide-in-left .22s ease-out; }
+}
+@keyframes slide-in-left { from { transform: translateX(-110%); opacity: .4; } }
+.flow-logo { width: 38px; height: 38px; display: grid; place-items: center; font-size: 22px; border: 3px solid var(--ink);
+             border-radius: 8px; background: linear-gradient(135deg, #ffd36b, #7bd651); box-shadow: 0 2px 0 var(--ink); }
+.small { font-size: 12px; }
+.team-strip { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.team-badge { display: inline-flex; align-items: center; gap: 6px; font: 600 12px var(--pixel); padding: 2px 8px;
+              border: 2px solid var(--ink); border-radius: 999px; background: #fff; box-shadow: inset 0 -3px 0 var(--team); }
+.team-badge i { width: 10px; height: 10px; border: 2px solid var(--ink); border-radius: 3px; background: var(--team); }
+.team-badge.as-btn { cursor: pointer; }
+.team-badge.as-btn:hover { background: var(--paper-2); }
+.handoff-line { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.flow li > .grow > .team-badge { margin-bottom: 4px; }
+.flow-handoff .slot-sm { background: #fff3c4; }
+.tag-flow { background: #dff3ff; }
+.samples { display: grid; gap: 6px; margin: 8px 0 10px; }
+.sample { display: flex; gap: 10px; align-items: flex-start; text-align: left; width: 100%; padding: 8px 10px; cursor: pointer;
+          background: #fff; border: 2px solid var(--ink); border-radius: 8px; box-shadow: 0 2px 0 var(--ink); }
+.sample:hover { background: var(--paper-2); }
+.sample:active { transform: translateY(1px); box-shadow: 0 1px 0 var(--ink); }
+.sample b { display: block; font-family: var(--pixel); font-weight: 600; }
+.sample small { display: block; color: var(--muted); font-size: 12px; line-height: 1.35; }
+.sample-icon { font-size: 20px; line-height: 1.2; }
+.sample-ai { border-style: dashed; background: #fbf8ff; }
+.flow-created { background: #f1fbe9; }
+.btn-flow { background: linear-gradient(180deg, #ffe58a, var(--gold)); }
+.chip-btn.chip-flow { background: var(--gold); }
+.fab-flow { position: absolute; right: 16px; bottom: 82px; z-index: 100; font-size: 15px; padding: 9px 14px;
+            display: flex; flex-direction: column; align-items: flex-start; line-height: 1.15; }
+.fab-flow small { font: 400 11px var(--body); opacity: .75; }
+@media (max-width: 900px) { .fab-flow { display: none; } }
+
+/* bottom bar: run any workflow */
+.run-pick { display: flex; flex-direction: column; gap: 4px; flex: none; max-width: 220px; }
+.run-name { display: inline-block; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
+.bar-select { font-size: 12px; padding: 2px 4px; border: 2px solid var(--ink); border-radius: 6px; background: var(--paper); max-width: 220px; }
+
+/* run details for any workflow */
+.run-step-head { display: flex; gap: 10px; align-items: center; }
+.run-step.todo { opacity: .55; }
+.run-text { white-space: pre-wrap; font: 12px/1.45 var(--body); background: var(--paper-2); border-radius: 6px; padding: 8px; margin: 6px 0 0; max-height: 220px; overflow: auto; }
+.web-results { margin: 6px 0 0; padding-left: 18px; font-size: 12px; display: grid; gap: 4px; }

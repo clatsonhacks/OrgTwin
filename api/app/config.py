@@ -47,6 +47,10 @@ class Settings:
     webhook_enabled = _env("WEBHOOK_ENABLED").lower() in ("1", "true", "yes")
     webhook_allowed_hosts = _env("WEBHOOK_ALLOWED_HOSTS")
     webhook_allow_http = _env("WEBHOOK_ALLOW_HTTP").lower() in ("1", "true", "yes")
+    # Web search step: Tavily or Brave with a key; without one, DuckDuckGo instant answers + Wikipedia
+    tavily_api_key = _env("TAVILY_API_KEY")
+    brave_search_api_key = _env("BRAVE_SEARCH_API_KEY")
+    web_user_agent = _env("WEB_USER_AGENT", "OrgTwin/0.1 (+https://github.com/clatsonhacks/Orgtwin)")
 
     # Optional access token for mutating endpoints on a public demo
     app_access_token = _env("APP_ACCESS_TOKEN")

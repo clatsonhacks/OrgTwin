@@ -25,6 +25,20 @@ In the world you watch it happen: the active team's workers get busy and its win
 handoff travels the stone paths as a crate, a pending approval floats a "!" over HQ and Finance, and a
 game-style hotbar at the bottom fills in as each of the 12 steps completes.
 
+## Cross-team workflows: describe it, every department's agent does its part
+
+Click **🔀 New workflow** (bottom right). A panel slides in from the left: describe the task in plain
+language, e.g. *“Sales reads the Won deals, Finance invoices each one after approval, then Customer Success
+sends a welcome email”*, and press **✦ Design with AI**. The model splits it into steps, gives each step to
+a department's agent and puts an A2A **handoff** wherever the work moves to another team (if it forgets
+one, OrgTwin adds it). Six sample workflows are one click away, and **✨ Ideas for <company>** asks the
+model for workflows that fit your own departments.
+
+Run it from the panel or the bottom bar (pick any workflow there). In the world, each team's building
+lights up when its agent works and every handoff travels the paths as a crate. Every step can be edited,
+including which team does it; handoffs are kept consistent when you change a step's team. Steps can also
+**search the web** (`web/search`, `web/read_page`) and later AI steps use the results.
+
 ## Skill Recorder: show it once, the agent learns it
 
 ![Skill Recorder review: what it picked up from the recording, and the workflow it wrote](docs/images/skill-review.png)
@@ -133,6 +147,8 @@ import, and sandbox containment: no network, read-only, no secrets, timeout kill
 | `STRIPE_SECRET_KEY` | Stripe dashboard → test mode → `sk_test_…` |
 | `SLACK_WEBHOOK_URL` | Slack app → Incoming Webhooks |
 | `DISCORD_WEBHOOK_URL`, `TEAMS_WEBHOOK_URL`, `TELEGRAM_*`, `NOTION_*`, `HUBSPOT_TOKEN`, `WEBHOOK_*` | Optional connectors — see [docs/connectors.md](docs/connectors.md). Each stays in demo mode until set. |
+| `TAVILY_API_KEY` or `BRAVE_SEARCH_API_KEY` | Optional: full web results for the web search step (it works without a key, with fewer results) |
+| `VULTR_VISION_MODEL`, `VULTR_REASONING_EFFORT` | Vision model for the recorder (e.g. `mimo-v2.6-pro`); `none` turns model thinking off so replies aren't empty |
 
 ## Known limits (honest list)
 

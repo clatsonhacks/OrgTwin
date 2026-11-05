@@ -38,20 +38,22 @@ export function heatColor(hours: number, max: number): string {
 
 export const TOOL_ICON: Record<string, string> = {
   sheets: "📊", sandbox: "🧪", llm: "🧠", email: "✉️", stripe: "🧾", slack: "💬",
-  approval: "✋", a2a: "📦", mcp: "⚙️", http: "🌐",
+  approval: "✋", a2a: "📦", mcp: "⚙️", http: "🌐", web: "🔎",
   discord: "🎮", teams: "🟪", telegram: "✈️", notion: "📝", hubspot: "🧲", webhook: "🌐",
 };
 export const TOOL_NAME: Record<string, string> = {
   llm: "AI writes", sheets: "Spreadsheet", email: "Email", slack: "Slack", approval: "Human approval",
-  sandbox: "Sandbox code", stripe: "Stripe invoice", a2a: "Hand to agent", mcp: "MCP tool", http: "HTTP call",
+  sandbox: "Sandbox code", stripe: "Stripe invoice", a2a: "Hand off to team", web: "Web search", mcp: "MCP tool", http: "HTTP call",
   discord: "Discord", teams: "Microsoft Teams", telegram: "Telegram", notion: "Notion", hubspot: "HubSpot", webhook: "Webhook",
 };
 export const ACTIONS: Record<string, { key: string; label: string }[]> = {
   sheets: [{ key: "read_rows", label: "read rows" }, { key: "update_row", label: "update row" }],
   llm: [{ key: "write", label: "write" }], email: [{ key: "send", label: "send" }],
   approval: [{ key: "request", label: "ask" }], slack: [{ key: "post", label: "post" }],
+  a2a: [{ key: "handoff", label: "hand off" }],
 };
 export function stepIcon(s: { tool: string; action?: string }) {
   if (s.tool === "sheets" && s.action === "update_row") return "✏️";
+  if (s.tool === "web" && s.action === "read_page") return "🌐";
   return TOOL_ICON[s.tool] ?? "•";
 }

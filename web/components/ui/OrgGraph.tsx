@@ -60,15 +60,19 @@ export default function OrgGraph({ org, version, onClose, onVisit }: {
   const on = (id: string) => !lit || lit.has(id);
 
   /** zoom by factor f around a screen point (defaults to the centre) */
-  const zoomAt = (f: number, clientX?: number, clientY?: number) => setView((v) => {
-    const r = svg.current!.getBoundingClientRect();
+  const zoomAt = (f: number, clientX?: number, clientY?: number) => {
+    if (!svg.current) return;
+    const r = svg.current.getBoundingClientRect(); // measured now, not inside the (deferred) updater
+    setView((v) => zoomView(v, r, f, clientX, clientY));
+  };
+  const zoomView = (v: typeof view, r: DOMRect, f: number, clientX?: number, clientY?: number) => {
     const side = Math.min(r.width, r.height);
     const scale = v.w / side;
     const px = v.x + ((clientX ?? r.left + r.width / 2) - r.left - (r.width - side) / 2) * scale;
     const py = v.y + ((clientY ?? r.top + r.height / 2) - r.top - (r.height - side) / 2) * scale;
     const w = Math.max(250, Math.min(2600, v.w * f));
     return { w, x: px - (px - v.x) * (w / v.w), y: py - (py - v.y) * (w / v.w) };
-  });
+  };
   const wheel = (e: React.WheelEvent) => zoomAt(e.deltaY > 0 ? 1.12 : 1 / 1.12, e.clientX, e.clientY);
   const down = (e: React.PointerEvent) => {
     pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -85,10 +89,13 @@ export default function OrgGraph({ org, version, onClose, onVisit }: {
       pinch.current = d;
       return;
     }
-    if (!drag.current) return;
-    const r = svg.current!.getBoundingClientRect();
+    const d = drag.current;
+    if (!d || !svg.current) return;
+    const r = svg.current.getBoundingClientRect();
     const scale = view.w / Math.min(r.width, r.height);
-    setView((v) => ({ ...v, x: drag.current!.vx - (e.clientX - drag.current!.x) * scale, y: drag.current!.vy - (e.clientY - drag.current!.y) * scale }));
+    // read the drag start now: React may run this updater after pointer-up has cleared drag.current
+    const x = d.vx - (e.clientX - d.x) * scale, y = d.vy - (e.clientY - d.y) * scale;
+    setView((v) => ({ ...v, x, y }));
   };
   const up = (e: React.PointerEvent) => {
     pointers.current.delete(e.pointerId);

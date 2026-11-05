@@ -300,9 +300,12 @@ def _email_fallback(row: dict | None, instruction: str, team_name: str) -> str:
     return f"Hi {first},\n\n{ctx_line} Would you have 15 minutes this week to talk next steps?\n\nBest,\nThe {team_name} team"
 
 
-async def run_workflow(run_id: int, wf: dict, team_name: str) -> None:
+async def run_workflow(run_id: int, wf: dict, team_names: dict[str, str] | str) -> None:
+    """team_names: {team_key: name} for the whole org (a plain string still works for one team)."""
+    if isinstance(team_names, str):
+        team_names = {wf["team_key"]: team_names}
     try:
-        await _run_generic(run_id, wf, team_name)
+        await _run_generic(run_id, wf, team_names)
     except Exception as e:
         _set_status(run_id, "failed")
         bus.emit("run.failed", {"error": f"{type(e).__name__}: {e}",
@@ -322,8 +325,11 @@ async def _exec(step: dict, ctx: dict, row: dict | None, team: str, team_name: s
         return await sheets.update_cell(str(row["id"]), p["column"], render(p["value"], ctx, row))
     if tool == "llm":
         instr = render(p["instruction"], ctx, row)
+        data: dict = {"row": row} if row else {"rows": ctx.get("rows", [])[:20]}
+        if ctx.get("vars"):  # earlier results (web search, notes, handoff messages) are context too
+            data["earlier_results"] = {k: str(v)[:3000] for k, v in ctx["vars"].items()}
         res = await llm.complete(f"You are the {team_name} agent. Do the instruction. Plain text, concise.",
-                                 f"Instruction: {instr}\nData: {json.dumps(row or {'rows': ctx.get('rows', [])[:20]})}",
+                                 f"Instruction: {instr}\nData: {json.dumps(data, default=str)[:12000]}",
                                  fallback=lambda: f"{instr} — done for {ctx.get('count', 0)} rows (demo mode).")
         ctx.setdefault("vars", {})[p["save_as"]] = res.text.strip()
         return {"save_as": p["save_as"], "text": res.text.strip()[:600], "llm": {"model": res.model, "mocked": res.mocked}}
@@ -341,70 +347,103 @@ async def _exec(step: dict, ctx: dict, row: dict | None, team: str, team_name: s
     if tool == "slack":
         return await slack.post(render(p["text"], ctx, row))
     if tool in registry.CONNECTORS:
-        return await registry.run(tool, action, {k: render(str(v), ctx, row) for k, v in p.items()})
+        out = await registry.run(tool, action, {k: render(str(v), ctx, row) for k, v in p.items()})
+        if out.get("save_as") and "text" in out:  # e.g. web search results → {{search}}
+            ctx.setdefault("vars", {})[out["save_as"]] = out["text"]
+            out = {**out, "text": out["text"][:800]}
+        return out
     raise RuntimeError(f"step {tool}.{action} cannot run in the generic engine")
 
 
-async def _run_generic(run_id: int, wf: dict, team_name: str) -> None:
-    steps, team = wf["steps"], wf["team_key"]
+async def _run_generic(run_id: int, wf: dict, team_names: dict[str, str]) -> None:
+    steps = wf["steps"]
     if not _wf.is_executable(steps):
         raise RuntimeError("this workflow uses steps the engine cannot run yet")
-    view = [{"key": f"s{i}", "team": team, "title": s["title"], "tool": s["tool"], "per_row": s["per_row"]}
-            for i, s in enumerate(steps)]
+    home = wf["team_key"]
+    team_of = [s.get("team") or home for s in steps]  # each step is done by its own department's agent
+    view = [{"key": f"s{i}", "team": team_of[i], "title": s["title"], "tool": s["tool"], "per_row": s["per_row"],
+             **({"to": s["params"].get("to")} if s["tool"] == "a2a" else {})} for i, s in enumerate(steps)]
+    teams_in_order = list(dict.fromkeys(team_of))
     bus.emit("run.started", {"workflow": wf["name"], "workflow_id": wf["id"], "kind": wf["kind"],
-                             "steps": view, "modes": settings.modes()}, run_id)
+                             "teams": teams_in_order, "steps": view, "modes": settings.modes()}, run_id)
     ctx: dict = {"rows": [], "count": 0, "vars": {}}
+    name = lambda k: team_names.get(k, k.replace("-", " ").title())  # noqa: E731
 
     async def do(i: int, row: dict | None):
-        s = steps[i]
+        s, team = steps[i], team_of[i]
         title = s["title"] + (f" → {_row_label(row)}" if row else "")
         bus.emit("step.started", {"step": f"s{i}", "team": team, "title": title, "tool": s["tool"]}, run_id)
         await asyncio.sleep(settings.step_delay_s)
-        result = await _exec(s, ctx, row, team, team_name)
+        result = await _exec(s, ctx, row, team, name(team))
         bus.emit("step.completed", {"step": f"s{i}", "team": team, "title": title, "tool": s["tool"],
                                     "result": result}, run_id)
 
+    async def handoff(i: int):
+        s, frm = steps[i], team_of[i]
+        to = s["params"].get("to") or frm
+        message = render(s["params"].get("message") or s["title"], ctx, None)
+        task = a2a.handoff(frm, to, message, {"count": ctx["count"], "rows": [_row_label(r) for r in ctx["rows"]][:20],
+                                              "results": {k: str(v)[:500] for k, v in ctx["vars"].items()}})
+        bus.emit("step.started", {"step": f"s{i}", "team": frm, "title": s["title"], "tool": "a2a"}, run_id)
+        await asyncio.sleep(settings.step_delay_s)
+        bus.emit("handoff", {"from": frm, "to": to, "task": task}, run_id)
+        ctx["vars"]["handoff"] = message
+        bus.emit("step.completed", {"step": f"s{i}", "team": frm, "title": s["title"], "tool": "a2a",
+                                    "result": {"a2a_task": task, "to": to}}, run_id)
+
     i = 0
+    approved_just_now = False  # an approval step right before covers the next sending step(s)
     while i < len(steps):
         s = steps[i]
+        if s["tool"] == "a2a":
+            await handoff(i)
+            i += 1
+            continue
         if s["per_row"]:
             j = i
-            while j < len(steps) and steps[j]["per_row"]:
+            while j < len(steps) and steps[j]["per_row"] and team_of[j] == team_of[i]:
                 j += 1
             group = list(range(i, j))
             rows = ctx["rows"]
-            if any(steps[k]["needs_approval"] for k in group) and rows:
-                ok = await request_approval(run_id, team, f"{wf['name']}: run for {len(rows)} row(s)", {
+            if any(steps[k]["needs_approval"] for k in group) and rows and not approved_just_now:
+                ok = await request_approval(run_id, team_of[i], f"{wf['name']}: run for {len(rows)} row(s)", {
                     "rows": [{"label": _row_label(r), "email": r.get("email", "")} for r in rows],
                     "steps": [steps[k]["title"] for k in group]})
                 if not ok:
                     bus.emit("run.completed", {"result": "stopped: a person rejected it", "hours_saved": 0}, run_id)
                     return
+            approved_just_now = False
             for row in rows:
                 for k in group:
                     await do(k, row)
             if not rows:
                 for k in group:
-                    bus.emit("step.completed", {"step": f"s{k}", "team": team, "title": steps[k]["title"],
+                    bus.emit("step.completed", {"step": f"s{k}", "team": team_of[k], "title": steps[k]["title"],
                                                 "tool": steps[k]["tool"], "result": {"skipped": "no matching rows"}}, run_id)
             i = j
             continue
-        if s["needs_approval"] or (s["tool"] == "approval"):
+        if (s["needs_approval"] and not approved_just_now) or (s["tool"] == "approval"):
             title = render(s["params"].get("title") or s["title"], ctx, None)
-            ok = await request_approval(run_id, team, title, {"step": s["title"], "count": ctx["count"]})
+            if s["tool"] == "approval":
+                bus.emit("step.started", {"step": f"s{i}", "team": team_of[i], "title": s["title"], "tool": "approval"}, run_id)
+            ok = await request_approval(run_id, team_of[i], title, {"step": s["title"], "count": ctx["count"]})
             if not ok:
                 bus.emit("run.completed", {"result": "stopped: a person rejected it", "hours_saved": 0}, run_id)
                 return
             if s["tool"] == "approval":
-                bus.emit("step.completed", {"step": f"s{i}", "team": team, "title": s["title"], "tool": "approval",
+                bus.emit("step.completed", {"step": f"s{i}", "team": team_of[i], "title": s["title"], "tool": "approval",
                                             "result": {"approved": True}}, run_id)
+                approved_just_now = True
                 i += 1
                 continue
         await do(i, None)
+        approved_just_now = approved_just_now and steps[i]["tool"] == "sheets"  # reading rows keeps the approval
         i += 1
 
     hours = round(_wf.manual_minutes(steps, ctx["count"]) / 60, 2)
     _ctx_update(run_id, hours_saved=hours, rows=ctx["count"])
     _set_status(run_id, "completed")
-    bus.emit("run.completed", {"result": f"{wf['name']} — done for {ctx['count']} row(s)", "hours_saved": hours,
-                               "rows": ctx["count"]}, run_id)
+    chain = " → ".join(name(t) for t in teams_in_order)
+    done = f"{wf['name']} — done" + (f" for {ctx['count']} row(s)" if ctx["count"] else "")
+    bus.emit("run.completed", {"result": done + (f" · {chain}" if len(teams_in_order) > 1 else ""),
+                               "hours_saved": hours, "rows": ctx["count"]}, run_id)

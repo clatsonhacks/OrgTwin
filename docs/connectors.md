@@ -13,6 +13,12 @@ its env vars are set. In demo mode it records what it *would* have sent, which s
 | HubSpot | `hubspot/upsert_contact {email, firstname, lastname, company, lifecyclestage}` | `HUBSPOT_TOKEN` | no |
 | Stripe | `stripe/invoice {email, name, amount, description}` (test keys only) | `STRIPE_SECRET_KEY` | yes |
 | Webhook | `webhook/request {url, method, body}` | `WEBHOOK_ENABLED`, `WEBHOOK_ALLOWED_HOSTS` | yes |
+| Web search | `web/search {query, max_results, save_as}` · `web/read_page {url, save_as}` | none needed; `TAVILY_API_KEY` or `BRAVE_SEARCH_API_KEY` for full web results | no |
+
+Web search works without a key: it uses DuckDuckGo's instant-answer API and Wikipedia search (both official,
+free APIs; general search-results pages are not scraped). Add a Tavily or Brave Search key for full web results.
+Results are saved as `{{search}}` (or the step's `save_as`) and later AI steps see them automatically.
+`read_page` uses the same private-address guard as webhooks, checked again on every redirect.
 
 Every parameter takes templates: `{{row.email}}`, `{{row.company}}`, `{{count}}`, `{{summary}}` (or any `save_as`
 name from an earlier AI step). The AI that designs workflows sees this same list, and the offline planner

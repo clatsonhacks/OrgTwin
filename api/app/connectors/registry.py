@@ -59,8 +59,11 @@ class Connector:
     handler: Callable[[str, dict], Awaitable[dict]]
     setup: str = ""
     extra: dict = field(default_factory=dict)
+    mode_fn: Callable[[], str] | None = None  # connectors that work without keys report their provider
 
     def mode(self) -> str:
+        if self.mode_fn:
+            return self.mode_fn()
         return "live" if self.configured() else "mock"
 
 
@@ -247,6 +250,111 @@ async def _webhook(action: str, p: dict) -> dict:
     return _record("webhook", action, "live", f"{method} {url} → {r.status_code}", {"status": r.status_code, "response": r.text[:300]})
 
 
+# ---------------- web: search + read a page ----------------
+
+def _web_mode() -> str:
+    return "tavily" if settings.tavily_api_key else "brave" if settings.brave_search_api_key else "basic"
+
+
+def _strip_html(raw: str) -> str:
+    import html as _html
+    import re as _re
+    raw = _re.sub(r"(?is)<(script|style|noscript|svg|head)\b.*?</\1>", " ", raw)
+    raw = _re.sub(r"(?s)<[^>]+>", " ", raw)
+    return _re.sub(r"\s+", " ", _html.unescape(raw)).strip()
+
+
+def _results_text(query: str, results: list[dict]) -> str:
+    if not results:
+        return f"No web results for “{query}”."
+    lines = [f"Web results for “{query}”:"]
+    for i, r in enumerate(results, 1):
+        lines.append(f"{i}. {r['title']} — {r['url']}\n   {r['snippet']}")
+    return "\n".join(lines)
+
+
+async def _search(query: str, n: int) -> tuple[list[dict], str]:
+    ua = {"User-Agent": settings.web_user_agent}
+    async with httpx.AsyncClient(timeout=20, headers=ua) as c:
+        if settings.tavily_api_key:
+            r = await c.post("https://api.tavily.com/search",
+                             json={"api_key": settings.tavily_api_key, "query": query, "max_results": n})
+            _raise(r, "Tavily")
+            return [{"title": x.get("title", ""), "url": x.get("url", ""), "snippet": (x.get("content") or "")[:400]}
+                    for x in r.json().get("results", [])[:n]], "tavily"
+        if settings.brave_search_api_key:
+            r = await c.get("https://api.search.brave.com/res/v1/web/search", params={"q": query, "count": n},
+                            headers={"X-Subscription-Token": settings.brave_search_api_key, "Accept": "application/json"})
+            _raise(r, "Brave Search")
+            return [{"title": x.get("title", ""), "url": x.get("url", ""), "snippet": _strip_html(x.get("description") or "")[:400]}
+                    for x in r.json().get("web", {}).get("results", [])[:n]], "brave"
+        # keyless: DuckDuckGo instant answer + Wikipedia search (both official, free APIs)
+        out: list[dict] = []
+        try:
+            r = await c.get("https://api.duckduckgo.com/", params={"q": query, "format": "json", "no_html": 1, "skip_disambig": 1})
+            d = r.json() if r.status_code == 200 else {}
+            if d.get("AbstractText"):
+                out.append({"title": d.get("Heading") or query, "url": d.get("AbstractURL", ""), "snippet": d["AbstractText"][:400]})
+            for t in d.get("RelatedTopics", []):
+                if len(out) >= n:
+                    break
+                if t.get("Text") and t.get("FirstURL"):
+                    out.append({"title": t["Text"].split(" - ")[0][:120], "url": t["FirstURL"], "snippet": t["Text"][:400]})
+        except (httpx.HTTPError, ValueError):
+            pass
+        if len(out) < n:
+            try:
+                r = await c.get("https://en.wikipedia.org/w/api.php",
+                                params={"action": "query", "list": "search", "srsearch": query, "format": "json", "srlimit": n})
+                for x in (r.json().get("query", {}).get("search", []) if r.status_code == 200 else []):
+                    if len(out) >= n:
+                        break
+                    title = x.get("title", "")
+                    out.append({"title": f"{title} (Wikipedia)", "url": f"https://en.wikipedia.org/wiki/{title.replace(' ', '_')}",
+                                "snippet": _strip_html(x.get("snippet") or "")[:400]})
+            except (httpx.HTTPError, ValueError):
+                pass
+        return out, "basic"
+
+
+async def _read_page(url: str) -> str:
+    """GET a public page (SSRF-checked on every redirect hop) and return its visible text."""
+    async with httpx.AsyncClient(timeout=20, follow_redirects=False, headers={"User-Agent": settings.web_user_agent}) as c:
+        for _ in range(4):
+            await check_url(url)
+            r = await c.get(url)
+            if r.status_code in (301, 302, 303, 307, 308) and r.headers.get("location"):
+                url = str(r.next_request.url) if r.next_request else r.headers["location"]
+                continue
+            _raise(r, "Web page")
+            ctype = r.headers.get("content-type", "")
+            if "html" not in ctype and "text" not in ctype:
+                raise RuntimeError(f"{url} is not a web page ({ctype or 'unknown type'})")
+            return _strip_html(r.text[:400_000])[:6000]
+    raise RuntimeError("too many redirects")
+
+
+async def _web(action: str, p: dict) -> dict:
+    save_as = (p.get("save_as") or ("search" if action == "search" else "page")).strip() or "search"
+    if action == "search":
+        query = p["query"].strip()
+        if not query:
+            raise RuntimeError("web search needs a query")
+        try:
+            n = max(1, min(10, int(float(p.get("max_results") or 5))))
+        except ValueError:
+            n = 5
+        results, provider = await _search(query, n)
+        text = _results_text(query, results)
+        rec = _record("web", action, provider, f"searched “{query}” → {len(results)} result(s)",
+                      {"query": query, "results": results})
+        return {**rec, "save_as": save_as, "text": text}
+    url = p["url"].strip()
+    text = await _read_page(url)
+    rec = _record("web", action, "live", f"read {url} ({len(text)} chars)", {"url": url})
+    return {**rec, "save_as": save_as, "text": text}
+
+
 # ---------------- the registry ----------------
 
 TEXT = [Param("text", "{{summary}}", "message", long=True)]
@@ -294,6 +402,19 @@ CONNECTORS: dict[str, Connector] = {c.key: c for c in [
                                  "call any HTTPS endpoint (Zapier, Make, n8n, your own API)")},
               lambda: settings.webhook_enabled, _webhook,
               "Set WEBHOOK_ENABLED=true. Optionally limit targets with WEBHOOK_ALLOWED_HOSTS=hooks.zapier.com,…"),
+    Connector("web", "Web search", "🔎", "research", ["TAVILY_API_KEY", "BRAVE_SEARCH_API_KEY"],
+              {"search": Action("search", "search the web",
+                                [Param("query", "", "search for"), Param("max_results", "5", "results"),
+                                 Param("save_as", "search", "save as")],
+                                "search the web; results are saved as {{<save_as>}} for later steps", manual_min=5,
+                                external=False),
+               "read_page": Action("read_page", "read a web page",
+                                   [Param("url", "https://", "URL"), Param("save_as", "page", "save as")],
+                                   "fetch a public web page's text, saved as {{<save_as>}}", manual_min=4, external=False)},
+              lambda: True, _web,
+              "Works without a key (DuckDuckGo instant answers + Wikipedia). For full web results add "
+              "TAVILY_API_KEY (tavily.com) or BRAVE_SEARCH_API_KEY (brave.com/search/api).",
+              mode_fn=_web_mode),
 ]}
 
 
@@ -346,6 +467,11 @@ async def test(key: str, url: str = "") -> dict:
             raise RuntimeError("give a URL to test")
         res = await _webhook("request", {"url": url, "method": "POST", "body": json.dumps({"text": msg})})
         return {"ok": True, "mode": res["mode"], "message": res["summary"]}
+    if key == "web":
+        res = await _web("search", {"query": "Vultr cloud computing", "max_results": "3"})
+        n = len(res["detail"]["results"])
+        return {"ok": n > 0, "mode": res["mode"],
+                "message": f"Search works ({res['mode']}): {n} result(s)." if n else "Search returned nothing."}
     if c.mode() == "mock":
         return {"ok": True, "mode": "mock", "message": f"Demo mode — set {', '.join(c.env)} to go live. Nothing was sent."}
     if key in ("discord", "teams", "telegram"):

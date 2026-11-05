@@ -98,7 +98,7 @@ const STEP_ICON: Record<string, string> = {
 
 export type RunView = {
   st: Record<string, "running" | "done">; results: Record<string, any>; finished?: LiveEvent; current?: string;
-  currentTitle?: string; currentTeam?: string; steps?: Step[]; name?: string; kind?: string;
+  currentTitle?: string; currentTeam?: string; steps?: Step[]; name?: string; kind?: string; workflowId?: number;
 };
 
 export function useRunView(events: LiveEvent[], runId: number | null): RunView {
@@ -106,25 +106,32 @@ export function useRunView(events: LiveEvent[], runId: number | null): RunView {
     const st: RunView["st"] = {}; const results: Record<string, any> = {};
     let finished: LiveEvent | undefined; let current: string | undefined;
     let currentTitle: string | undefined, currentTeam: string | undefined, steps: Step[] | undefined, name: string | undefined, kind: string | undefined;
+    let workflowId: number | undefined;
     for (const e of events) {
       if (e.run_id !== runId) continue;
-      if (e.type === "run.started") { steps = e.payload.steps; name = e.payload.workflow; kind = e.payload.kind ?? "hero"; }
+      if (e.type === "run.started") { steps = e.payload.steps; name = e.payload.workflow; kind = e.payload.kind ?? "hero"; workflowId = e.payload.workflow_id; }
       if (e.type === "step.started") { st[e.payload.step] = "running"; current = e.payload.step; currentTitle = e.payload.title; currentTeam = e.payload.team; }
       if (e.type === "step.completed") { st[e.payload.step] = "done"; results[e.payload.step] = e.payload.result; }
       if (e.type === "run.completed" || e.type === "run.failed") finished = e;
     }
-    return { st, results, finished, current, currentTitle, currentTeam, steps, name, kind };
+    return { st, results, finished, current, currentTitle, currentTeam, steps, name, kind, workflowId };
   }, [events, runId]);
 }
 
-export function Hotbar({ steps, view, running, busy, canRun, onRun, onDetails }: {
+export type BarChoice = { id: number | null; label: string };
+
+export function Hotbar({ steps, view, running, busy, canRun, onRun, onDetails, label, idleCaption, choices, selected, onPick, teamName }: {
   steps: Step[]; view: RunView; running: boolean; busy: boolean; canRun: boolean; onRun: () => void; onDetails: () => void;
+  /** short name of the workflow on the bar (button label) */
+  label: string; idleCaption: string;
+  choices: BarChoice[]; selected: number | null; onPick: (id: number | null) => void;
+  teamName: (key?: string) => string;
 }) {
   const isHero = !view.kind || view.kind === "hero";
   const doneCount = steps.filter((s) => view.st[s.key ?? ""] === "done").length;
-  let caption = "Lead-to-cash · Sales → Finance → Customer Success, run by agents";
-  if (!isHero && view.name) caption = `${view.kind === "skill" ? "📘 " : ""}${view.name}`;
-  if (running && view.currentTitle) caption = `${cap(view.currentTeam)} agent · ${view.currentTitle}`;
+  let caption = idleCaption;
+  if (!isHero && view.name) caption = `${view.kind === "skill" ? "📘 " : view.kind === "flow" ? "🔀 " : ""}${view.name}`;
+  if (running && view.currentTitle) caption = `${teamName(view.currentTeam)} agent · ${view.currentTitle}`;
   if (view.finished) caption = view.finished.type === "run.failed" ? `Run failed: ${view.finished.payload.error}`
     : `✔ ${view.finished.payload.result}${view.finished.payload.hours_saved ? ` · ~${view.finished.payload.hours_saved}h of manual work saved` : ""}`;
   return (
@@ -134,15 +141,23 @@ export function Hotbar({ steps, view, running, busy, canRun, onRun, onDetails }:
         {(running || view.finished) && <button className="linkbtn" onClick={onDetails}>details</button>}
       </div>
       <div className="hotbar">
-        <button className="btn btn-go btn-run" disabled={!canRun || busy || running} onClick={onRun}>
-          {running ? "Running…" : view.finished && isHero ? "▶ Run again" : "▶ Run lead-to-cash"}
-        </button>
+        <div className="run-pick">
+          <button className="btn btn-go btn-run" disabled={!canRun || busy || running} onClick={onRun} title={`Run ${label}`}>
+            {running ? "Running…" : view.finished ? "▶ Run again" : <>▶ Run <span className="run-name">{label}</span></>}
+          </button>
+          {choices.length > 1 && (
+            <select className="bar-select" value={selected ?? ""} disabled={running} aria-label="Workflow on the bar"
+                    onChange={(e) => onPick(e.target.value ? Number(e.target.value) : null)}>
+              {choices.map((c) => <option key={c.id ?? "hero"} value={c.id ?? ""}>{c.label}</option>)}
+            </select>
+          )}
+        </div>
         <div className="slots" role="list">
           {steps.map((s, i) => {
             const st = view.st[s.key ?? ""];
             return (
               <div key={s.key} role="listitem" className={`slot ${st ?? ""} ${s.tool === "approval" ? "slot-gate" : ""}`}
-                   title={`${i + 1}. ${s.title} (${s.team}${s.to ? ` → ${s.to}` : ""})`}>
+                   title={`${i + 1}. ${s.title} (${teamName(s.team)}${s.to ? ` → ${teamName(s.to)}` : ""})`}>
                 <span>{(isHero && STEP_ICON[s.key ?? ""]) || stepIcon(s)}</span>
                 <small>{i + 1}</small>
               </div>
@@ -201,7 +216,8 @@ export function SidePanel({ title, onClose, children }: { title: string; onClose
   );
 }
 
-export function RunDetails({ view }: { view: RunView }) {
+export function RunDetails({ view, teamName }: { view: RunView; teamName?: (k?: string) => string }) {
+  if (view.kind && view.kind !== "hero") return <GenericRunDetails view={view} teamName={teamName ?? cap} />;
   const lead = view.results.pick_lead, score = view.results.score_lead, q = view.results.qualify;
   const inv = view.results.send_invoice?.invoice ?? view.results.draft_invoice;
   if (!lead) return <p className="muted">Start a run to see the details here.</p>;
@@ -237,6 +253,49 @@ export function RunDetails({ view }: { view: RunView }) {
           {inv.hosted_invoice_url && <a href={inv.hosted_invoice_url} target="_blank" rel="noreferrer">Open Stripe invoice ↗</a>}
         </section>
       )}
+    </>
+  );
+}
+
+/** Any designed / recorded / cross-team run: what each team's agent did, step by step. */
+function GenericRunDetails({ view, teamName }: { view: RunView; teamName: (k?: string) => string }) {
+  const steps = view.steps ?? [];
+  if (!steps.length) return <p className="muted">Start a run to see the details here.</p>;
+  return (
+    <>
+      <section>
+        <h3>{view.kind === "flow" ? "🔀 " : ""}{view.name}</h3>
+        {view.finished && <p className="muted">{view.finished.type === "run.failed" ? `Failed: ${view.finished.payload.error}` : view.finished.payload.result}</p>}
+      </section>
+      {steps.map((s, i) => {
+        const r = view.results[s.key ?? ""];
+        const st = view.st[s.key ?? ""];
+        const text: string | undefined = r?.text ?? r?.summary ?? r?.email?.subject;
+        const results: { title: string; url: string; snippet: string }[] | undefined = r?.detail?.results;
+        return (
+          <section key={s.key ?? i} className={`run-step ${st ?? "todo"}`}>
+            <div className="run-step-head">
+              <span className="slot slot-sm">{stepIcon(s)}</span>
+              <div className="grow">
+                <div className="eyebrow">{teamName(s.team)}{s.tool === "a2a" && s.to ? ` → ${teamName(s.to)}` : ""}</div>
+                <b>{s.title}</b>
+              </div>
+              <span className="muted">{st === "done" ? "✓" : st === "running" ? "…" : ""}</span>
+            </div>
+            {r?.skipped && <p className="muted">Skipped: {r.skipped}</p>}
+            {r?.approved === true && <p className="muted">Approved by a person</p>}
+            {results && results.length > 0 && (
+              <ul className="web-results">
+                {results.slice(0, 5).map((x) => (
+                  <li key={x.url}><a href={x.url} target="_blank" rel="noreferrer">{x.title}</a><span className="muted"> {x.snippet}</span></li>
+                ))}
+              </ul>
+            )}
+            {text && !results && <pre className="run-text">{String(text).slice(0, 1200)}</pre>}
+            {r?.email && <p className="muted">✉️ to {r.email.to}{r.email.mode === "mock" ? " · demo" : ""}</p>}
+          </section>
+        );
+      })}
     </>
   );
 }

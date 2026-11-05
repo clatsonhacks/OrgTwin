@@ -2,3 +2,5 @@ id,name,company,email,notes,deal_value,status
 L-101,Dana Rivera,Northwind Robotics,dana@example.com,"Inbound: wants to automate warehouse ops reporting, 40 staff, budget approved",4800,New
 L-102,Sam Okafor,Bluebird Clinics,sam@example.com,"Webinar attendee, exploring options for next year",2400,New
 L-103,Priya Nair,Kite Logistics,priya@example.com,"Referral from partner, urgent: replacing legacy tool this quarter",9600,New
+L-104,Leo Martins,Harbor Freight Co,leo@example.com,"Signed the annual plan last week, wants to start onboarding",7200,Won
+L-105,Aisha Bello,Greenline Grocers,aisha@example.com,"Invoice INV-2207 is 21 days overdue, usually pays on reminder",3100,Overdue
