@@ -4,7 +4,8 @@ import { Html, MapControls, OrthographicCamera } from "@react-three/drei";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import type { Org, Team } from "@/lib/types";
-import { buildLayout, type Plot, type WorldLayout } from "./layout";
+import { buildLayout, teamColor, type Plot, type WorldLayout } from "./layout";
+import Office, { ARM, SkillBook, buildOffice } from "./Office";
 import * as tex from "./textures";
 
 export type Courier = { id: string; from: string; to: string; start: number; label: string };
@@ -20,14 +21,24 @@ type Props = {
   onSelectTeam: (key: string | null) => void;
   onSelectRole: (team: string, role: string) => void;
   paused?: boolean;
+  /** When set, the camera is inside this department's office. */
+  inside?: string | null;
+  selectedPerson?: string | null;
+  activePerson?: string | null;
+  /** skills per person inside the open office, keyed by person id (`role#seat`) */
+  skillPeople?: Record<string, number>;
+  onSelectPerson?: (id: string | null) => void;
+  onEnter?: (team: string) => void;
 };
+
+type Focus = { key: string; x: number; y: number; z: number; scale: number };
 
 const COURIER_MS = 3200;
 
 export default function World(props: Props) {
   return (
     <Canvas shadows gl={{ alpha: true, antialias: true }} dpr={[1, 2]} frameloop={props.paused ? "never" : "always"}
-            onPointerMissed={() => props.onSelectTeam(null)} style={{ background: "transparent" }}>
+            onPointerMissed={() => (props.inside ? props.onSelectPerson?.(null) : props.onSelectTeam(null))} style={{ background: "transparent" }}>
       <OrthographicCamera makeDefault position={[30, 28, 30]} zoom={24} near={-200} far={400} />
       <hemisphereLight args={["#dff3ff", "#7a6a4a", 0.9]} />
       <directionalLight position={[18, 30, 10]} intensity={1.6} castShadow
@@ -38,18 +49,40 @@ export default function World(props: Props) {
   );
 }
 
-function Scene({ org, selectedTeam, selectedRole, activeTeam, approvalTeams, couriers, skillRoles = [], onSelectTeam, onSelectRole }: Props) {
+function Scene({ org, selectedTeam, selectedRole, activeTeam, approvalTeams, couriers, skillRoles = [], onSelectTeam, onSelectRole,
+                 inside, selectedPerson = null, activePerson = null, skillPeople = {}, onSelectPerson, onEnter }: Props) {
   const teams = org?.teams ?? [];
   const layout = useMemo(() => buildLayout(teams), [teams]);
   const controls = useRef<any>(null);
   const plot = selectedTeam ? layout.plots.find((p) => p.key === selectedTeam) ?? null : null;
   const maxHours = Math.max(1, ...teams.map((t) => t.automatable_hours));
+  const insideIdx = inside ? teams.findIndex((t) => t.key === inside) : -1;
+  const insideTeam = insideIdx >= 0 ? teams[insideIdx] : null;
+  const insideColor = insideTeam ? teamColor(insideTeam.key, insideIdx) : "#999";
+  const office = useMemo(() => (insideTeam ? buildOffice(insideTeam, insideColor) : null), [insideTeam, insideColor]);
+
+  const focus: Focus | null = office && insideTeam
+    // the office is ~W×D; the island is 2·radius wide — scale the zoom so the room fills the view
+    ? { key: `office-${insideTeam.key}`, x: 0, y: 0.6, z: 0, scale: (layout.radius * 2.25) / (Math.max(office.W, office.D) * 1.25 + 2) }
+    : plot ? { key: plot.key, x: plot.x, y: 1.5, z: plot.z, scale: 1.8 } : null;
+
+  if (insideTeam && office) {
+    return (
+      <>
+        <MapControls ref={controls} makeDefault enableRotate={false} enableDamping screenSpacePanning minZoom={6} maxZoom={140} />
+        <CameraRig focus={focus} controls={controls} radius={layout.radius} />
+        <Office team={insideTeam} color={insideColor} layout={office} active={activeTeam === insideTeam.key}
+                activePerson={activePerson} selectedPerson={selectedPerson} skilled={skillPeople}
+                onSelectPerson={(id) => onSelectPerson?.(id)} />
+      </>
+    );
+  }
 
   return (
     <>
       <MapControls ref={controls} makeDefault enableRotate={false} enableDamping screenSpacePanning
                    minZoom={6} maxZoom={90} />
-      <CameraRig focus={plot} controls={controls} radius={layout.radius} />
+      <CameraRig focus={focus} controls={controls} radius={layout.radius} />
       <Island layout={layout} />
       <Trees trees={layout.trees} />
       <Hq title={org?.ceo.title ?? "CEO"} company={org?.company ?? ""} waiting={approvalTeams.length > 0}
@@ -62,7 +95,8 @@ function Scene({ org, selectedTeam, selectedRole, activeTeam, approvalTeams, cou
                     waiting={approvalTeams.includes(t.key)} beacon={t.automatable_hours / maxHours}
                     selectedRole={selectedTeam === t.key ? selectedRole : null}
                     skilled={skillRoles.filter((k) => k.startsWith(`${t.key}/`)).map((k) => k.slice(t.key.length + 1))}
-                    onSelect={() => onSelectTeam(t.key)} onSelectRole={(r) => onSelectRole(t.key, r)} />
+                    onSelect={() => (selectedTeam === t.key && onEnter ? onEnter(t.key) : onSelectTeam(t.key))}
+                    onSelectRole={(r) => onSelectRole(t.key, r)} />
         );
       })}
       {couriers.map((c) => <CourierCrate key={c.id} c={c} layout={layout} />)}
@@ -72,7 +106,7 @@ function Scene({ org, selectedTeam, selectedRole, activeTeam, approvalTeams, cou
 
 /* ---------------- camera ---------------- */
 
-function CameraRig({ focus, controls, radius }: { focus: Plot | null; controls: React.RefObject<any>; radius: number }) {
+function CameraRig({ focus, controls, radius }: { focus: Focus | null; controls: React.RefObject<any>; radius: number }) {
   const { camera, size } = useThree();
   const goal = useRef({ target: new THREE.Vector3(), zoom: 24 });
   const key = useRef("");
@@ -84,8 +118,8 @@ function CameraRig({ focus, controls, radius }: { focus: Plot | null; controls: 
     if (k !== key.current) {
       key.current = k;
       moving.current = true;
-      goal.current.zoom = focus ? Math.min(70, fit * 1.8) : fit;
-      goal.current.target.set(focus ? focus.x : 0, focus ? 1.5 : 0, focus ? focus.z : 0);
+      goal.current.zoom = focus ? Math.min(110, fit * focus.scale) : fit;
+      goal.current.target.set(focus ? focus.x : 0, focus ? focus.y : 0, focus ? focus.z : 0);
       if (focus && size.width > 900) {
         // shift the view so the building sits left of the side panel (screen-right = (1,0,-1)/√2)
         const k = 210 / goal.current.zoom;
@@ -241,7 +275,7 @@ function Building({ team, plot, selected, dimmed, active, waiting, beacon, selec
           {windows.map(([x, y], i) => (
             <mesh key={i} position={[x, y, 1.51]} material={win}><planeGeometry args={[0.7, 0.6]} /></mesh>
           ))}
-          <mesh position={[0, 0.55, 1.52]}><planeGeometry args={[0.7, 1.1]} /><meshLambertMaterial color="#3b2a1a" /></mesh>
+          <mesh position={[0, 0.55, 1.52]}><planeGeometry args={[0.7, 1.1]} /><meshLambertMaterial color={selected ? "#ffd36b" : "#3b2a1a"} /></mesh>
         </group>
         <mesh ref={ring} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.03, 0.6]}>
           <ringGeometry args={[2.6, 2.85, 4, 1, Math.PI / 4]} />
@@ -253,6 +287,11 @@ function Building({ team, plot, selected, dimmed, active, waiting, beacon, selec
       <Beacon height={1.5 + beacon * 6} y={h + 0.8} color={plot.color} active={active} dimmed={dimmed} />
       {active && <Sparks y={h + 1} color={plot.color} />}
       {waiting && <Alert y={h + 2.4} />}
+      {selected && (
+        <Html position={[0, h + 1.4, 0]} center zIndexRange={[9, 0]}>
+          <button className="enter-tag" onClick={onSelect}>🚪 Step inside</button>
+        </Html>
+      )}
       {!selected && (
         <Html position={[0, h + 1.2, 0]} center zIndexRange={[9, 0]}>
           <div className={`sign ${dimmed ? "sign-dim" : ""}`} onClick={onSelect} style={{ ["--team" as any]: plot.color }}>
@@ -381,30 +420,6 @@ function Worker({ x, tagY, color, skin, active, selected, name, hours, showName,
     </group>
   );
 }
-
-/** A small floating book above a worker who has learned a recorded skill. */
-function SkillBook({ phase }: { phase: number }) {
-  const g = useRef<THREE.Group>(null);
-  useFrame(({ clock }) => {
-    if (!g.current) return;
-    const t = clock.elapsedTime + phase;
-    g.current.position.y = 2.05 + Math.sin(t * 2.4) * 0.08;
-    g.current.rotation.y = t * 1.2;
-  });
-  return (
-    <group ref={g} position={[0, 2.05, 0]}>
-      <mesh><boxGeometry args={[0.42, 0.1, 0.32]} /><meshLambertMaterial color="#5b3fd6" emissive="#2a1680" emissiveIntensity={0.4} /></mesh>
-      <mesh position={[0.02, 0, 0]}><boxGeometry args={[0.36, 0.07, 0.3]} /><meshLambertMaterial color="#fff6dc" /></mesh>
-      <mesh position={[0, 0.06, 0]}><boxGeometry args={[0.42, 0.03, 0.32]} /><meshLambertMaterial color="#5b3fd6" /></mesh>
-    </group>
-  );
-}
-
-const ARM = (() => {
-  const g = new THREE.BoxGeometry(0.2, 0.6, 0.22);
-  g.translate(0, -0.25, 0); // pivot at the shoulder
-  return g;
-})();
 
 /* ---------------- courier (agent-to-agent handoff) ---------------- */
 

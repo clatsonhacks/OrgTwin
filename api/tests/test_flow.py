@@ -67,6 +67,21 @@ def test_lead_to_cash_end_to_end():
             assert wf["kind"] == "draft" and wf["executable"]
             assert [x["action"] for x in wf["steps"]][:2] == ["read_rows", "send"]
             assert wf["steps"][0]["params"]["where"] == {"status": "Overdue"}
+
+            # hand the workflow to one specific person (desk) in the department
+            org = (await c.get("/api/org")).json()
+            role = next(r for t in org["teams"] if t["key"] == "finance" for r in t["roles"] if r["key"] == "ar-specialist")
+            seat = f"ar-specialist#{role['headcount'] - 1}"
+            out = (await c.put(f"/api/workflows/{wf['id']}/assign", json={
+                "team_key": "finance", "role_key": "ar-specialist", "person": seat, "person_name": "Maya K."})).json()
+            assert out["meta"]["person"] == seat and out["meta"]["person_name"] == "Maya K."
+            bad = await c.put(f"/api/workflows/{wf['id']}/assign", json={
+                "team_key": "finance", "role_key": "ar-specialist", "person": f"ar-specialist#{role['headcount']}"})
+            assert bad.status_code == 400
+            hero = next(w for w in (await c.get("/api/workflows")).json() if w["kind"] == "hero")
+            moved = await c.put(f"/api/workflows/{hero['id']}/assign", json={
+                "team_key": "finance", "role_key": "ar-specialist", "person": seat})
+            assert moved.status_code == 400
     asyncio.run(go())
 
 

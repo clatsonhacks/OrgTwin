@@ -297,3 +297,34 @@ blockquote { margin: 8px 0; padding: 6px 10px; border-left: 4px solid var(--team
   .sign { padding: 2px 6px; border-top-width: 4px; } .sign b { font-size: 11px; } .sign span, .sign-live { display: none; }
   .caption { font-size: 12px; padding: 5px 10px; }
 }
+
+/* ---------- inside a department ---------- */
+.btn-wide { width: 100%; display: flex; flex-direction: column; align-items: center; }
+.btn-wide small { font-family: var(--body); font-size: 11px; opacity: .85; }
+.enter-tag { font-family: var(--pixel); font-size: 14px; background: var(--grass); color: #fff; border: 2px solid var(--ink); border-radius: 6px;
+  padding: 3px 10px; cursor: pointer; white-space: nowrap; box-shadow: 0 3px 0 var(--ink); text-shadow: 0 2px 0 var(--grass-d);
+  animation: bob 1.4s ease-in-out infinite; }
+@keyframes bob { 50% { transform: translateY(-4px); } }
+.sign-office { cursor: default; }
+.rolesign { font-family: var(--pixel); font-size: 13px; background: var(--paper); border: 2px solid var(--ink); border-left: 6px solid var(--team);
+  border-radius: 4px; padding: 1px 8px; white-space: nowrap; box-shadow: 0 2px 0 var(--ink); user-select: none; pointer-events: none; }
+.rolesign small { margin-left: 6px; color: var(--muted); }
+.people-group { margin-bottom: 10px; }
+.people-group:last-child { margin-bottom: 0; }
+.people { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.person { display: inline-flex; align-items: center; gap: 6px; background: #fff; border: 2px solid #d9cdb2; border-radius: 8px; padding: 4px 8px 4px 4px;
+  cursor: pointer; font-size: 13px; }
+.person .avatar { width: 20px; height: 20px; }
+.person:hover { border-color: var(--ink); }
+.person.on { border-color: var(--ink); box-shadow: 0 3px 0 var(--ink); background: #fffdf6; }
+.person .skillcount { margin-left: 0; }
+.person-more { font-size: 12px; align-self: center; }
+.person-card { background: #fffdf6; }
+.person-head { display: flex; align-items: center; gap: 10px; }
+.person-head h3 { margin: 0; }
+.avatar-lg { width: 40px; height: 40px; }
+.person-card .tasks { margin-left: 50px; }
+.assign { margin-top: 10px; display: grid; gap: 4px; }
+.assign .row { display: flex; gap: 6px; align-items: center; }
+.assign select { min-width: 0; padding: 6px; border: 2px solid var(--ink); border-radius: 6px; background: #fff; font-size: 13px; }
+.wf-owner { display: block; font-size: 11px; font-weight: 400; }

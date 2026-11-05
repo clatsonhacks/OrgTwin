@@ -1,4 +1,5 @@
 "use client";
+import { findPerson, ownerOf } from "@/lib/people";
 import { useMemo, useState } from "react";
 import type { Approval, LiveEvent, Metrics, Org, Outbox, Status, Step, Workflow } from "@/lib/types";
 import { stepIcon } from "@/lib/api";
@@ -271,14 +272,14 @@ export function Activity({ outbox, events }: { outbox: Outbox; events: LiveEvent
 /* ---------- org skill library ---------- */
 
 export function SkillLibrary({ org, workflows, onRun, onOpenTeam }: {
-  org: Org; workflows: Workflow[]; onRun: (id: number) => void; onOpenTeam: (team: string, role: string) => void;
+  org: Org; workflows: Workflow[]; onRun: (id: number) => void; onOpenTeam: (team: string, role: string, person?: string) => void;
 }) {
   const skills = workflows.filter((w) => w.kind === "skill");
   if (!skills.length) {
     return (
       <section>
         <p><b>No skills recorded yet.</b></p>
-        <p className="muted">Open a department, pick an agent and press <b>🎥 Record a skill</b>. Do the task once while
+        <p className="muted">Step inside a department, click someone at a desk and press <b>🎥 Record a skill</b>. Do the task once while
           talking it through; OrgTwin turns it into a workflow that agent can run.</p>
       </section>
     );
@@ -290,16 +291,17 @@ export function SkillLibrary({ org, workflows, onRun, onOpenTeam }: {
           <h3><span className="sw sw-inline" /> {t.name}</h3>
           {skills.filter((s) => s.team_key === t.key).map((s) => {
             const role = t.roles.find((r) => r.key === s.role_key);
+            const owner = findPerson(org, t.key, ownerOf(s));
             return (
               <div key={s.id} className="skill">
                 <div className="grow">
                   <b>📘 {s.name}</b>
-                  <div className="muted">{role?.name ?? s.role_key} · {s.steps.length} steps · learned from {s.meta?.how ?? "a recording"}</div>
+                  <div className="muted">👤 {owner?.name ?? "—"} · {role?.name ?? s.role_key} · {s.steps.length} steps · learned from {s.meta?.how ?? "a recording"}</div>
                   <div className="mini-steps">{s.steps.map((st, k) => <span key={k} title={st.title}>{stepIcon(st)}</span>)}</div>
                 </div>
                 <div className="col-btns">
                   <button className="btn btn-go" disabled={!s.executable} onClick={() => onRun(s.id)}>▶ Run</button>
-                  <button className="linkbtn" onClick={() => onOpenTeam(s.team_key, s.role_key)}>open</button>
+                  <button className="linkbtn" onClick={() => onOpenTeam(s.team_key, s.role_key, owner?.id)}>visit desk</button>
                 </div>
               </div>
             );

@@ -9,6 +9,7 @@ import TeamDrawer from "@/components/ui/TeamDrawer";
 import { Activity, ApprovalCard, Departments, Hotbar, RunDetails, SidePanel, SkillLibrary, Toasts, TopBar, useRunView,
          type Toast } from "@/components/ui/Hud";
 import SkillRecorder from "@/components/ui/SkillRecorder";
+import { ownerOf, type Person } from "@/lib/people";
 
 const World = dynamic(() => import("@/components/world/World"), { ssr: false });
 
@@ -32,7 +33,10 @@ export default function Home() {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [runId, setRunId] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
-  const [recorder, setRecorder] = useState<{ team: string; role: string } | null>(null);
+  const [recorder, setRecorder] = useState<{ team: string; role: string; person: Person | null } | null>(null);
+  const [inside, setInside] = useState<string | null>(null);
+  const [selectedPerson, setSelectedPerson] = useState<string | null>(null);
+  const [activePerson, setActivePerson] = useState<string | null>(null);
   const runIdRef = useRef<number | null>(null);
   runIdRef.current = runId;
 
@@ -87,14 +91,18 @@ export default function Home() {
         case "approval.decided":
           api<Approval[]>("/api/approvals").then(setApprovals); break;
         case "run.completed":
-          setActiveTeam(null); refresh();
+          setActiveTeam(null); setActivePerson(null); refresh();
           toast(p.hours_saved ? `🎉 Done — ~${p.hours_saved}h of manual work saved` : `${p.result}`, "ok"); break;
         case "run.failed":
-          setActiveTeam(null); refresh(); toast(`Run failed: ${p.error}`, "bad"); break;
+          setActiveTeam(null); setActivePerson(null); refresh(); toast(`Run failed: ${p.error}`, "bad"); break;
         case "step.completed":
           if (["email", "slack"].includes(p.tool) || p.step === "send_invoice") api<Outbox>("/api/outbox").then(setOutbox);
           break;
         case "org.generated":
+          setInside(null); setSelectedPerson(null); refresh(); break;
+        case "workflow.assigned":
+          if (p.person_name) toast(`📘 ${p.person_name} now owns “${p.name}”`, "ok");
+          refresh(); break;
         case "workflow.created":
         case "skill.saved":
           refresh(); break;
@@ -117,9 +125,24 @@ export default function Home() {
   const recTeam = recTeamIdx >= 0 ? org!.teams[recTeamIdx] : null;
   const recRole = recTeam?.roles.find((r) => r.key === recorder?.role) ?? null;
 
+  // people with skills inside the open office: { "role#seat": count }
+  const skillPeople = useMemo(() => {
+    const out: Record<string, number> = {};
+    workflows.filter((w) => w.kind === "skill" && w.team_key === inside).forEach((w) => { const k = ownerOf(w); out[k] = (out[k] ?? 0) + 1; });
+    return out;
+  }, [workflows, inside]);
+
   const selectTeam = (k: string | null) => {
-    setSelectedTeam(k); setSelectedRole(null);
+    setSelectedTeam(k); setSelectedRole(null); setSelectedPerson(null);
+    // switching department while inside walks you into the other office
+    setInside((cur) => (cur && k ? k : null));
     setPanel(k ? "team" : (p) => (p === "team" ? null : p));
+  };
+  const enter = (k: string) => { setSelectedTeam(k); setInside(k); setSelectedPerson(null); setPanel("team"); };
+  const exit = () => { setInside(null); setSelectedPerson(null); };
+  const selectPerson = (id: string | null) => {
+    setSelectedPerson(id);
+    if (id) { setSelectedRole(id.split("#")[0]); setPanel("team"); }
   };
 
   const startRun = async () => {
@@ -133,7 +156,10 @@ export default function Home() {
     setBusy(true);
     try {
       const r = await post<{ run_id: number }>(`/api/workflows/${id}/run`);
-      setRunId(r.run_id); selectTeam(null); setPanel(null);
+      const wf = workflows.find((w) => w.id === id);
+      setRunId(r.run_id);
+      if (wf && inside === wf.team_key) setActivePerson(ownerOf(wf)); // stay inside and watch them work
+      else { selectTeam(null); setPanel(null); }
     } catch (e: any) { toast(e.message, "bad"); } finally { setBusy(false); }
   };
   const decide = async (a: Approval, approved: boolean) => {
@@ -146,6 +172,8 @@ export default function Home() {
       <div className="world">
         <World org={showStart && !org ? null : org} selectedTeam={selectedTeam} selectedRole={selectedRole}
                activeTeam={activeTeam} approvalTeams={approvalTeams} couriers={couriers} skillRoles={skillRoles} paused={!!recorder}
+               inside={inside} selectedPerson={selectedPerson} activePerson={activePerson} skillPeople={skillPeople}
+               onSelectPerson={selectPerson} onEnter={enter}
                onSelectTeam={selectTeam}
                onSelectRole={(t, r) => { setSelectedTeam(t); setSelectedRole(r); setPanel("team"); }} />
       </div>
@@ -164,16 +192,17 @@ export default function Home() {
             </button>
           </div>
           {panel === "team" && team && (
-            <TeamDrawer team={team} index={teamIdx} selectedRole={selectedRole} onSelectRole={setSelectedRole}
+            <TeamDrawer org={org} team={team} index={teamIdx} inside={inside === team.key} onEnter={() => enter(team.key)} onExit={exit}
+                        selectedPerson={selectedPerson} onSelectPerson={selectPerson} selectedRole={selectedRole} onSelectRole={setSelectedRole}
                         workflows={workflows} onChanged={refresh} onError={(m) => toast(m, "bad")}
                         onClose={() => selectTeam(null)} onRunHero={startRun} onRunWorkflow={runWorkflow}
-                        onRecord={() => selectedRole && setRecorder({ team: team.key, role: selectedRole })} />
+                        onRecord={(person) => { const r = person?.role ?? selectedRole; if (r) setRecorder({ team: team.key, role: r, person }); }} />
           )}
           {panel === "run" && <SidePanel title="Run details" onClose={() => setPanel(null)}><RunDetails view={view} /></SidePanel>}
           {panel === "skills" && (
             <SidePanel title="Skill library" onClose={() => setPanel(null)}>
               <SkillLibrary org={org} workflows={workflows} onRun={runWorkflow}
-                            onOpenTeam={(t, r) => { setSelectedTeam(t); setSelectedRole(r); setPanel("team"); }} />
+                            onOpenTeam={(t, r, person) => { if (person) { enter(t); selectPerson(person); } else { setSelectedTeam(t); setSelectedRole(r); setPanel("team"); } }} />
             </SidePanel>
           )}
           {panel === "activity" && <SidePanel title="Activity" onClose={() => setPanel(null)}><Activity outbox={outbox} events={events} /></SidePanel>}
@@ -184,7 +213,10 @@ export default function Home() {
                              onRun={startRun} onDetails={() => setPanel("run")} />}
           </div>
           {!selectedTeam && !running && !view.finished && (
-            <div className="hint block">Click a building to step inside · scroll to zoom · drag to move</div>
+            <div className="hint block">Click a building, then click it again to step inside · scroll to zoom · drag to move</div>
+          )}
+          {inside && !selectedPerson && (
+            <div className="hint block">Click anyone at a desk to see their role and give them a skill</div>
           )}
         </>
       )}
@@ -194,9 +226,9 @@ export default function Home() {
                    onBuilt={(o) => { setOrg(o); setOnboarding(false); selectTeam(null); refresh(); toast(`🧱 ${o.company} is built — ${o.teams.length} departments`, "ok"); }} />
       )}
       {recorder && recTeam && recRole && (
-        <SkillRecorder team={recTeam} teamIndex={recTeamIdx} role={recRole} onError={(m) => toast(m, "bad")}
+        <SkillRecorder team={recTeam} teamIndex={recTeamIdx} role={recRole} person={recorder.person} onError={(m) => toast(m, "bad")}
                        onClose={() => setRecorder(null)}
-                       onSaved={(w) => { setRecorder(null); refresh(); toast(`📘 ${recRole.name} learned “${w.name}”`, "ok"); }} />
+                       onSaved={(w) => { setRecorder(null); refresh(); toast(`📘 ${recorder.person?.name ?? recRole.name} learned “${w.name}”`, "ok"); }} />
       )}
       <Toasts toasts={toasts} />
     </main>

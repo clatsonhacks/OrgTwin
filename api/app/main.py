@@ -106,6 +106,24 @@ class WorkflowGenIn(BaseModel):
     team_key: str
     role_key: str
     goal: str = Field(min_length=3, max_length=500)
+    person: str | None = Field(default=None, max_length=120)
+    person_name: str | None = Field(default=None, max_length=120)
+
+
+class AssignIn(BaseModel):
+    team_key: str
+    role_key: str
+    person: str = Field(min_length=3, max_length=120)
+    person_name: str = Field(default="", max_length=120)
+
+
+def _check_person(role: dict, person: str | None) -> None:
+    """A person id is `<role_key>#<seat>` with seat < the role's headcount."""
+    if person is None:
+        return
+    key, _, seat = person.partition("#")
+    if key != role["key"] or not seat.isdigit() or int(seat) >= max(1, int(role.get("headcount") or 1)):
+        raise HTTPException(400, f"no person {person!r} in role {role['key']!r}")
 
 
 class WorkflowUpdateIn(BaseModel):
@@ -135,10 +153,12 @@ async def generate_workflow(body: WorkflowGenIn):
     role = next((r for r in (team or {}).get("roles", []) if r["key"] == body.role_key), None)
     if not team or not role:
         raise HTTPException(404, "team or role not found")
+    _check_person(role, body.person)
     steps, mocked = await workflows.generate(team, role, body.goal, await sheets.columns())
+    meta = {"person": body.person, "person_name": body.person_name or ""} if body.person else {}
     with SessionLocal() as s:
         w = Workflow(org_id=org.id, team_key=team["key"], role_key=role["key"], name=body.goal[:120],
-                     goal=body.goal, kind="draft", steps=steps)
+                     goal=body.goal, kind="draft", steps=steps, meta=meta)
         s.add(w)
         s.commit()
         out = {**_wf_dict(w), "mocked": mocked}
@@ -159,6 +179,26 @@ def update_workflow(wf_id: int, body: WorkflowUpdateIn):
             w.name = body.name[:120]
         s.commit()
         return _wf_dict(w)
+
+
+@app.put("/api/workflows/{wf_id}/assign", dependencies=[Depends(require_token)])
+def assign_workflow(wf_id: int, body: AssignIn):
+    """Give a workflow / skill to one specific person (desk) inside a department."""
+    _, team, role = _team_role(body.team_key, body.role_key)
+    _check_person(role, body.person)
+    with SessionLocal() as s:
+        w = s.get(Workflow, wf_id)
+        if not w:
+            raise HTTPException(404, "workflow not found")
+        if w.kind == "hero" and (w.team_key, w.role_key) != (team["key"], role["key"]):
+            raise HTTPException(400, "the hero workflow can only move between people in its own role")
+        w.team_key, w.role_key = team["key"], role["key"]
+        w.meta = {**(w.meta or {}), "person": body.person, "person_name": body.person_name}
+        s.commit()
+        out = _wf_dict(w)
+    bus.emit("workflow.assigned", {"workflow_id": wf_id, "team": team["key"], "role": role["key"],
+                                   "person": body.person, "person_name": body.person_name, "name": out["name"]})
+    return out
 
 
 def _team_role(team_key: str, role_key: str):
@@ -207,6 +247,7 @@ async def analyze_skill(body: AnalyzeIn):
 def save_skill(body: SkillIn):
     org, team, role = _team_role(body.team_key, body.role_key)
     meta = {k: v for k, v in body.meta.items() if k != "frames"}  # never persist frames
+    _check_person(role, meta.get("person"))
     with SessionLocal() as s:
         w = Workflow(org_id=org.id, team_key=team["key"], role_key=role["key"], name=body.name, goal=body.name,
                      kind="skill", steps=workflows.normalize(body.steps), meta=meta)

@@ -6,13 +6,14 @@ import { MAX_KEYFRAMES, canRecordScreen, canTranscribe, evenly, framesFromVideo,
 import type { Role, SkillAnalysis, Step, Team, Workflow } from "@/lib/types";
 import StepEditor, { newStep } from "./StepEditor";
 import { teamColor } from "@/components/world/layout";
+import type { Person } from "@/lib/people";
 
 type Stage = "intro" | "recording" | "extracting" | "captured" | "analyzing" | "review";
 
 const SAMPLE_NARRATION = "I open the leads spreadsheet and look at the rows where status is New. For each one I write a short follow up email and send it, then I mark the row as contacted. Finally I tell the team on Slack.";
 
-export default function SkillRecorder({ team, teamIndex, role, onClose, onSaved, onError }: {
-  team: Team; teamIndex: number; role: Role; onClose: () => void; onSaved: (w: Workflow) => void; onError: (m: string) => void;
+export default function SkillRecorder({ team, teamIndex, role, person, onClose, onSaved, onError }: {
+  team: Team; teamIndex: number; role: Role; person?: Person | null; onClose: () => void; onSaved: (w: Workflow) => void; onError: (m: string) => void;
 }) {
   const [stage, setStage] = useState<Stage>("intro");
   const [frames, setFrames] = useState<Keyframe[]>([]);
@@ -97,7 +98,7 @@ export default function SkillRecorder({ team, teamIndex, role, onClose, onSaved,
   const save = async () => {
     setSaving(true);
     try {
-      const w = await post<Workflow>("/api/skills", { team_key: team.key, role_key: role.key, name, steps, meta: analysis?.meta ?? {} });
+      const w = await post<Workflow>("/api/skills", { team_key: team.key, role_key: role.key, name, steps, meta: { ...(analysis?.meta ?? {}), ...(person ? { person: person.id, person_name: person.name } : {}) } });
       onSaved(w);
     } catch (e: any) { onError(e.message); } finally { setSaving(false); }
   };
@@ -111,7 +112,7 @@ export default function SkillRecorder({ team, teamIndex, role, onClose, onSaved,
           <div className="swatch swatch-rec">{stage === "recording" ? <span className="recdot" /> : "🎥"}</div>
           <div className="grow">
             <div className="eyebrow">Skill recorder · {team.name}</div>
-            <h2>Teach the {role.name} agent a skill</h2>
+            <h2>{person ? `Teach ${person.name} (${role.name}) a skill` : `Teach the ${role.name} agent a skill`}</h2>
           </div>
           <button className="x" onClick={() => { speech.current?.stop(); session.current?.stop(); onClose(); }} aria-label="Close">✕</button>
         </header>
@@ -221,7 +222,7 @@ export default function SkillRecorder({ team, teamIndex, role, onClose, onSaved,
                 <span className="grow" />
                 <button className="btn" onClick={() => setStage("captured")}>Back</button>
                 <button className="btn btn-go" disabled={saving || steps.length === 0 || name.trim().length < 2} onClick={save}>
-                  {saving ? "Saving…" : `📘 Save skill to ${role.name}`}
+                  {saving ? "Saving…" : `📘 Save skill to ${person?.name ?? role.name}`}
                 </button>
               </div>
             </div>
