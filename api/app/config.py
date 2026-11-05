@@ -15,6 +15,9 @@ class Settings:
     inference_model = _env("VULTR_INFERENCE_MODEL")  # empty -> first model from /models
     # Vision model for the Skill Recorder; empty -> auto-detect a vision-capable model from /models
     vision_model = _env("VULTR_VISION_MODEL")
+    # Reasoning models can spend the whole max_tokens budget thinking and return no answer.
+    # "none" turns thinking off; set to "" to omit the parameter.
+    reasoning_effort = _env("VULTR_REASONING_EFFORT", "none")
 
     # Sandbox runner: "docker" (isolated) or "local" (dev only, NOT isolated)
     runner = _env("RUNNER", "docker")

@@ -67,10 +67,14 @@ async def describe_images(prompt: str, images: list[str], max_tokens: int = 1500
     content += [{"type": "image_url", "image_url": {"url": img}} for img in images]
     async with httpx.AsyncClient(timeout=180) as client:
         r = await client.post(f"{settings.inference_base_url}/chat/completions", headers=_headers(),
-                              json={"model": model, "temperature": 0.2, "max_tokens": max_tokens,
+                              json={"model": model, "temperature": 0.2, "max_tokens": max_tokens, **_reasoning(),
                                     "messages": [{"role": "user", "content": content}]})
         r.raise_for_status()
         return LLMResult(r.json()["choices"][0]["message"]["content"], mocked=False, model=model)
+
+
+def _reasoning() -> dict:
+    return {"reasoning_effort": settings.reasoning_effort} if settings.reasoning_effort else {}
 
 
 def _headers() -> dict:
@@ -78,7 +82,7 @@ def _headers() -> dict:
 
 
 async def complete(system: str, user: str, fallback: Callable[[], str],
-                   temperature: float = 0.4, max_tokens: int = 1200) -> LLMResult:
+                   temperature: float = 0.4, max_tokens: int = 4000) -> LLMResult:
     if not settings.inference_api_key:
         return LLMResult(fallback(), mocked=True, model="mock")
     async with httpx.AsyncClient(timeout=90) as client:
@@ -86,7 +90,7 @@ async def complete(system: str, user: str, fallback: Callable[[], str],
         r = await client.post(
             f"{settings.inference_base_url}/chat/completions",
             headers=_headers(),
-            json={"model": model, "temperature": temperature, "max_tokens": max_tokens,
+            json={"model": model, "temperature": temperature, "max_tokens": max_tokens, **_reasoning(),
                   "messages": [{"role": "system", "content": system},
                                {"role": "user", "content": user}]},
         )

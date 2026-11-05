@@ -26,9 +26,14 @@ async def run_python(code: str, payload: dict) -> dict:
     else:
         cmd = [sys.executable, "-I", "-c", code]
         isolation = {"type": "local", "warning": "not isolated (dev mode)"}
+    env = {"PATH": "/usr/local/bin:/usr/bin:/bin"}
+    if sys.platform == "win32":
+        # Windows Python cannot start without SYSTEMROOT (no secrets in it).
+        import os
+        env = {"PATH": os.environ.get("PATH", ""), "SYSTEMROOT": os.environ.get("SYSTEMROOT", r"C:\Windows")}
     proc = await asyncio.create_subprocess_exec(
         *cmd, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE, env={"PATH": "/usr/local/bin:/usr/bin:/bin"})
+        stderr=asyncio.subprocess.PIPE, env=env)
     try:
         out, err = await asyncio.wait_for(proc.communicate(json.dumps(payload).encode()),
                                           timeout=settings.sandbox_timeout_s)
