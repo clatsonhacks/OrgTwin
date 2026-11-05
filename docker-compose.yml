@@ -1,0 +1,51 @@
+# OrgTwin on a single Vultr Cloud Compute VM.
+#   cp .env.example .env   # fill in keys
+#   docker compose up -d --build
+services:
+  caddy:
+    image: caddy:2.8.4-alpine
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:-:80}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    depends_on: [web, api]
+
+  web:
+    build: ./web
+    restart: unless-stopped
+
+  api:
+    build: ./api
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://orgtwin:${POSTGRES_PASSWORD:-orgtwin}@db:5432/orgtwin
+      RUNNER: docker
+    volumes:
+      # The API starts throwaway sandbox containers (no network, read-only, capped) on the host Docker.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Optional: Google service-account file referenced by GOOGLE_SERVICE_ACCOUNT_JSON=/secrets/google-sa.json
+      - ./secrets:/secrets:ro
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: postgres:16.4-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: orgtwin
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-orgtwin}
+      POSTGRES_DB: orgtwin
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U orgtwin"]
+      interval: 3s
+      retries: 20
+
+volumes:
+  caddy_data:
+  pgdata:

@@ -1,0 +1,13 @@
+# SITE_ADDRESS=":80" serves plain HTTP on the VM IP.
+# SITE_ADDRESS="orgtwin.example.com" gets an automatic HTTPS certificate (DNS must point to the VM).
+{$SITE_ADDRESS} {
+	encode gzip
+	handle /api/* {
+		reverse_proxy api:8000 {
+			flush_interval -1
+		}
+	}
+	handle {
+		reverse_proxy web:3000
+	}
+}
