@@ -19,7 +19,7 @@ export function TopBar({ org, metrics, status, onRebuild, onConnect }: {
           <b>OrgTwin</b>
           <span>{org ? org.company : "AI operations twin"}</span>
         </div>
-        {org && <button className="linkbtn" onClick={onRebuild}>rebuild</button>}
+        {org && <button className="rebuild-btn" onClick={onRebuild} title="Rebuild the company from a new description, website or CSV">↻ Rebuild</button>}
       </div>
       <div className="grow" />
       {metrics && org && (

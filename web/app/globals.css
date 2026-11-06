@@ -526,3 +526,11 @@ button.mode-demo:not(:disabled):hover small { color: var(--ink); text-decoration
 .signin-telegram { background: #229ed9; color: #fff; }
 .tg-row { flex-direction: column; align-items: stretch; margin-top: 0; }
 .tg-row .btn-big { margin-top: 4px; }
+
+/* "Rebuild" next to the company name: a real button, not a faint link */
+.rebuild-btn { margin-left: 4px; display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; cursor: pointer;
+               font: 600 13px var(--pixel); color: var(--ink); background: var(--gold); border: 2px solid var(--ink);
+               border-radius: 8px; box-shadow: 0 2px 0 var(--ink); white-space: nowrap; }
+.rebuild-btn:hover { background: #ffd866; }
+.rebuild-btn:active { transform: translateY(1px); box-shadow: 0 1px 0 var(--ink); }
+.rebuild-btn:focus-visible { outline: 3px solid #2864c7; outline-offset: 2px; }
