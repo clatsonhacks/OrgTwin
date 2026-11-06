@@ -1,5 +1,24 @@
 """Runtime configuration, read from environment variables (see ../.env.example)."""
 import os
+from pathlib import Path
+
+
+def _load_dotenv(path: Path) -> None:
+    """Local dev: read the repo-root .env (docker compose passes it in already). Real env vars win."""
+    if os.environ.get("ORGTWIN_NO_DOTENV") or not path.is_file():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        os.environ.setdefault(key.strip(), value)
+
+
+_load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 
 def _env(name: str, default: str = "") -> str:
