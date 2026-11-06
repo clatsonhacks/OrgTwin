@@ -343,7 +343,7 @@ async def _exec(step: dict, ctx: dict, row: dict | None, team: str, team_name: s
 
 
 async def _run_generic(run_id: int, wf: dict, team_name: str) -> None:
-    steps, team = wf["steps"], wf["team_key"]
+    steps, team = _wf.normalize(wf["steps"]), wf["team_key"]  # re-normalize: fixes plans saved before newer rules
     if not _wf.is_executable(steps):
         raise RuntimeError("this workflow uses steps the engine cannot run yet")
     view = [{"key": f"s{i}", "team": team, "title": s["title"], "tool": s["tool"], "per_row": s["per_row"]}
