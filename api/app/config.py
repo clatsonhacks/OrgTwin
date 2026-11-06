@@ -52,6 +52,10 @@ class Settings:
     email_redirect_to = _env("EMAIL_REDIRECT_TO")  # safety: send every demo email here
     stripe_secret_key = _env("STRIPE_SECRET_KEY")
     slack_webhook_url = _env("SLACK_WEBHOOK_URL")
+    discord_webhook_url = _env("DISCORD_WEBHOOK_URL")
+    teams_webhook_url = _env("TEAMS_WEBHOOK_URL")
+    telegram_bot_token = _env("TELEGRAM_BOT_TOKEN")
+    telegram_chat_id = _env("TELEGRAM_CHAT_ID")
 
     # Optional access token for mutating endpoints on a public demo
     app_access_token = _env("APP_ACCESS_TOKEN")
@@ -67,9 +71,15 @@ class Settings:
             "sheets": "google" if (self.google_sa_json and self.sheet_id) else "mock",
             "email": "smtp" if (self.smtp_host and self.smtp_from) else "mock",
             "stripe": "stripe-test" if self.stripe_secret_key.startswith("sk_test_") else "mock",
-            "slack": "webhook" if self.slack_webhook_url else "mock",
+            "chat": ", ".join(self.chat_channels()) or "mock",
             "runner": self.runner,
         }
+
+    def chat_channels(self) -> list[str]:
+        return [name for name, on in (
+            ("slack", self.slack_webhook_url), ("discord", self.discord_webhook_url),
+            ("teams", self.teams_webhook_url),
+            ("telegram", self.telegram_bot_token and self.telegram_chat_id)) if on]
 
 
 settings = Settings()
