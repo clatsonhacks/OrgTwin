@@ -24,9 +24,12 @@ def test_planner_from_narration():
 
 
 def test_normalize_rejects_unrunnable():
-    steps = workflows.normalize([{"tool": "gmail", "per_row": True, "params": {"to": "{{row.email}}"}}])
-    assert steps[0]["tool"] == "email"
-    assert not workflows.is_executable(steps)  # per-row step without a read_rows before it
+    raw = [{"tool": "email", "action": "send", "per_row": True, "params": {"to": "{{row.email}}"}}]
+    assert not workflows.is_executable(raw)  # per-row step without a read_rows before it
+    # normalize maps the alias and repairs the plan: {{row.*}} steps get a read_rows first and run per row
+    steps = workflows.normalize([{"tool": "gmail", "params": {"to": "{{row.email}}"}}])
+    assert [(s["tool"], s["action"]) for s in steps] == [("sheets", "read_rows"), ("email", "send")]
+    assert steps[1]["per_row"] and workflows.is_executable(steps)
 
 
 def test_record_save_run():

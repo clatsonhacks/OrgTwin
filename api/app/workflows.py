@@ -90,7 +90,23 @@ def normalize_step(s: dict) -> dict:
 def normalize(steps) -> list[dict]:
     if isinstance(steps, dict):
         steps = steps.get("steps") or steps.get("workflow") or []
-    return [normalize_step(s) for s in (steps or []) if isinstance(s, dict)][:12]
+    return _ensure_rows([normalize_step(s) for s in (steps or []) if isinstance(s, dict)][:12])
+
+
+_ROW_TPL = re.compile(r"\{\{\s*row\.")
+
+
+def _ensure_rows(steps: list[dict]) -> list[dict]:
+    """A step that uses {{row.*}} only makes sense per row; read the sheet first if nothing does."""
+    first_read = next((i for i, s in enumerate(steps) if s["tool"] == "sheets" and s["action"] == "read_rows"), None)
+    for i, s in enumerate(steps):
+        if (first_read is None or i > first_read) and _ROW_TPL.search(json.dumps(s["params"])):
+            s["per_row"] = True
+    first_per_row = next((i for i, s in enumerate(steps) if s["per_row"]), None)
+    if first_per_row is not None and (first_read is None or first_read > first_per_row):
+        steps.insert(0, normalize_step({"title": "Read rows from the spreadsheet", "tool": "sheets",
+                                        "action": "read_rows", "params": {"limit": 10}}))
+    return steps[:12]
 
 
 def is_executable(steps: list[dict]) -> bool:
