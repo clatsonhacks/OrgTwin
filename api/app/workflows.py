@@ -10,7 +10,7 @@ Executable step library (run by engine.run_workflow):
   llm.write          params {"instruction": "...", "save_as": "summary"}
   email.send         params {"to": "{{row.email}}", "subject": "...", "instruction": "..."}  (body written by AI)
   approval.request   params {"title": "..."}
-  slack.post         params {"text": "..."}
+  slack.post         params {"text": "..."}  (team chat: Slack, Discord, Teams, Telegram)
 Templates: {{row.<column>}}, {{count}}, {{<save_as name>}}.
 Other tools (sandbox, stripe, a2a, mcp, http) can be designed but are not run by the generic engine yet.
 """
@@ -32,6 +32,7 @@ TOOL_ALIASES = {
     "excel": "sheets", "spreadsheet": "sheets", "google_sheets": "sheets", "googlesheets": "sheets",
     "sheet": "sheets", "csv": "sheets", "crm": "sheets",
     "gmail": "email", "mail": "email", "smtp": "email", "outlook": "email",
+    "discord": "slack", "teams": "slack", "msteams": "slack", "telegram": "slack", "chat": "slack", "notify": "slack",
     "ai": "llm", "gpt": "llm", "model": "llm", "write": "llm",
     "human": "approval", "approve": "approval", "review": "approval",
 }
@@ -47,7 +48,7 @@ Allowed tool/action/params:
 - llm/write: {"instruction": str, "save_as": str}
 - email/send: {"to": "{{row.email}}", "subject": str, "instruction": str}  (the AI writes the body from the instruction)
 - approval/request: {"title": str}
-- slack/post: {"text": str}
+- slack/post: {"text": str}  (posts to team chat: Slack, Discord, Teams and/or Telegram)
 Use templates like {{row.name}}, {{row.company}}, {{count}}. Columns available in the sheet: COLUMNS.
 Set needs_approval=true on steps that send anything outside the company."""
 
@@ -173,8 +174,9 @@ def plan_from_text(text: str, role_tasks: list[str] | None = None) -> list[dict]
     if any(w in t for w in ("summary", "summarize", "summarise", "report")):
         steps.append({"title": "Write a short summary", "tool": "llm", "action": "write",
                       "params": {"instruction": "Summarise what was done in 3 bullet points.", "save_as": "summary"}})
-    if "slack" in t or "notify" in t or "tell the team" in t:
-        steps.append({"title": "Tell the team on Slack", "tool": "slack", "action": "post",
+    if any(w in t for w in ("slack", "discord", "microsoft teams", "ms teams", "on teams", "in teams", "telegram",
+                            "notify", "tell the team")):
+        steps.append({"title": "Tell the team in chat", "tool": "slack", "action": "post",
                       "params": {"text": "Done: processed {{count}} rows." + (" {{summary}}" if "summary" in t else "")}})
     if not steps:
         for task in (role_tasks or ["Do the task"])[:3]:
