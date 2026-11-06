@@ -16,7 +16,7 @@ export function describe(s: Step): string {
   if (s.tool === "email") return `${each}email ${p.to || "?"} — “${p.subject}”`;
   if (s.tool === "llm") return `${each}AI writes: ${p.instruction}`;
   if (s.tool === "approval") return `Ask a person: ${p.title}`;
-  if (s.tool === "slack") return `Post to Slack: ${p.text}`;
+  if (s.tool === "slack") return `Post to team chat: ${p.text}`;
   return s.description || TOOL_NAME[s.tool] || s.tool;
 }
 

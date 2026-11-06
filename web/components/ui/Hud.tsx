@@ -251,7 +251,7 @@ export function Activity({ outbox, events }: { outbox: Outbox; events: LiveEvent
         ))}
       </section>
       <section>
-        <h3>Slack</h3>
+        <h3>Team chat</h3>
         {outbox.slack.length === 0 && <p className="muted">None yet.</p>}
         {outbox.slack.map((m, i) => <p key={i} className="slackmsg">{m.text}</p>)}
       </section>

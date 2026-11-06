@@ -41,7 +41,7 @@ export const TOOL_ICON: Record<string, string> = {
   approval: "✋", a2a: "📦", mcp: "⚙️", http: "🌐",
 };
 export const TOOL_NAME: Record<string, string> = {
-  llm: "AI writes", sheets: "Spreadsheet", email: "Email", slack: "Slack", approval: "Human approval",
+  llm: "AI writes", sheets: "Spreadsheet", email: "Email", slack: "Team chat", approval: "Human approval",
   sandbox: "Sandbox code", stripe: "Stripe", a2a: "Hand to agent", mcp: "MCP tool", http: "HTTP call",
 };
 export const ACTIONS: Record<string, { key: string; label: string }[]> = {
