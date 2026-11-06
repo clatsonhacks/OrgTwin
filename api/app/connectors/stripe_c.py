@@ -16,6 +16,8 @@ def _stripe():
     if not settings.stripe_secret_key.startswith("sk_test_"):
         raise RuntimeError("Refusing to use a non-test Stripe key")
     stripe.api_key = settings.stripe_secret_key
+    # Retry dropped connections; the SDK sends an idempotency key, so a retried create can't duplicate.
+    stripe.max_network_retries = 3
     return stripe
 
 
