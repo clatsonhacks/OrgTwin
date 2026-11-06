@@ -87,6 +87,12 @@ CONNECTOR_SETUP: dict[str, ConnectorSetup] = {
         [FieldSpec("STRIPE_SECRET_KEY", "stripe_secret_key", "Test secret key", "secret", "sk_test_…")],
         ["Open the Stripe dashboard in test mode.", "Copy the secret key that starts with sk_test_."],
         "https://dashboard.stripe.com/test/apikeys", "Open Stripe API keys"),
+    "github": ConnectorSetup(
+        [FieldSpec("GITHUB_TOKEN", "github_token", "Personal access token", "secret", "github_pat_…"),
+         FieldSpec("GITHUB_REPO", "github_repo", "Default repo", placeholder="owner/name")],
+        ["GitHub → Settings → Developer settings → Fine-grained tokens → Generate.",
+         "Pick the repo and allow Pull requests, Issues and Contents (read & write)."],
+        "https://github.com/settings/personal-access-tokens/new", "Create a GitHub token"),
     "web": ConnectorSetup(
         [FieldSpec("TAVILY_API_KEY", "tavily_api_key", "Tavily API key (optional)", "secret", "tvly-…", optional=True),
          FieldSpec("BRAVE_SEARCH_API_KEY", "brave_search_api_key", "Brave Search key (optional)", "secret", optional=True)],
@@ -170,6 +176,8 @@ def _normalise(env: str, v: str) -> str:
     # people paste links; keep the id
     if env == "GOOGLE_SHEET_ID" and "/d/" in v:
         v = v.split("/d/", 1)[1].split("/", 1)[0]
+    if env == "GITHUB_REPO" and "github.com/" in v:
+        v = "/".join(v.split("github.com/", 1)[1].split("/")[:2]).removesuffix(".git")
     if env == "NOTION_DATABASE_ID" and ("notion.so" in v or "notion.site" in v):
         tail = v.split("?", 1)[0].rstrip("/").rsplit("/", 1)[-1]
         v = tail.rsplit("-", 1)[-1]
@@ -181,7 +189,7 @@ def connector_values() -> dict:
 
 
 _OAUTH_ATTRS = ("google_refresh_token", "google_account", "stripe_secret_key", "stripe_account", "notion_token",
-                "slack_webhook_url", "discord_webhook_url", "hubspot_token", "telegram_chat_id")
+                "slack_webhook_url", "discord_webhook_url", "hubspot_token", "telegram_chat_id", "github_token")
 
 
 def apply_connectors() -> None:
@@ -209,6 +217,8 @@ def apply_connectors() -> None:
         settings.discord_webhook_url = st.get("webhook_url", "")
     if st := oa.get("hubspot"):
         settings.hubspot_token = st.get("access_token", "")  # refreshed by oauth.hubspot_token() before use
+    if st := oa.get("github"):
+        settings.github_token = st.get("access_token", "")
     if st := oa.get("telegram"):
         settings.telegram_chat_id = st.get("chat_id", "")
 

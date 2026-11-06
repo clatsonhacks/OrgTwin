@@ -4,12 +4,14 @@ import { createPortal } from "react-dom";
 import { api, del, post, put } from "@/lib/api";
 import { loadConnectors, useConnectors, type Connector, type ConnectorSetup, type SetupField, type SignIn } from "@/lib/connectors";
 import { connectTelegram, connectWithPopup, openHelp } from "@/lib/oauth";
+import { useMe } from "@/lib/access";
 
 const CATEGORY: Record<string, string> = {
   data: "Data", chat: "Messaging", docs: "Docs", crm: "CRM", billing: "Billing", developer: "Developer", research: "Research",
 };
 const SIGNIN_NAME: Record<SignIn, string> = {
   google: "Google", stripe: "Stripe", notion: "Notion", slack: "Slack", discord: "Discord", hubspot: "HubSpot", telegram: "Telegram",
+  github: "GitHub",
 };
 /** What the user is allowing, in plain words (shown before they sign in). */
 const PERMS: Record<string, string[]> = {
@@ -21,11 +23,14 @@ const PERMS: Record<string, string[]> = {
   discord: ["🎮 Post messages in the server channel you pick on the next screen"],
   hubspot: ["🧲 Create and update contacts in your HubSpot CRM"],
   telegram: ["✈️ The OrgTwin bot posts in the chat or group where you press Start"],
+  github: ["🐙 Read pull requests and issues in your repos", "💬 Comment, review (never approve) and open PRs / issues when a skill asks"],
 };
 
 /** Every connector: one Connect button each. Google and Stripe open a sign-in popup; the rest a short form. */
 export default function ConnectorsPanel({ onError, onToast }: { onError: (m: string) => void; onToast?: (m: string) => void }) {
   const list = useConnectors();
+  const me = useMe();
+  const mayConnect = !me?.people_mode || !!me?.admin;
   const [connecting, setConnecting] = useState<Connector | null>(null);
   const live = list.filter((c) => c.mode === "live").length;
   const groups = Array.from(new Set(list.map((c) => c.category)));
@@ -34,7 +39,7 @@ export default function ConnectorsPanel({ onError, onToast }: { onError: (m: str
       <section>
         <p className="muted">
           Agents use these in workflows. <b>{live}</b> of {list.length} are connected; the rest run in <b>demo mode</b> and
-          only record what they would have sent. Click <b>Connect</b> to link your own account.
+          only record what they would have sent. {mayConnect ? <>Click <b>Connect</b> to link your own account.</> : <>Only an admin can connect apps.</>}
         </p>
       </section>
       {groups.map((g) => (
@@ -42,11 +47,12 @@ export default function ConnectorsPanel({ onError, onToast }: { onError: (m: str
           <h3>{CATEGORY[g] ?? g}</h3>
           <div className="conns">
             {list.filter((c) => c.category === g).map((c) => (
-              <ConnectorCard key={c.key} c={c} onError={onError} onConnect={() => setConnecting(c)} />
+              <ConnectorCard key={c.key} c={c} onError={onError} onConnect={mayConnect ? () => setConnecting(c) : undefined} />
             ))}
           </div>
         </section>
       ))}
+      <McpServers admin={mayConnect} onError={onError} onToast={onToast} />
       {connecting && (
         <ConnectDialog c={connecting} onClose={() => { setConnecting(null); loadConnectors(true).catch(() => {}); }}
                        onError={onError} onToast={onToast} />
@@ -55,7 +61,7 @@ export default function ConnectorsPanel({ onError, onToast }: { onError: (m: str
   );
 }
 
-function ConnectorCard({ c, onError, onConnect }: { c: Connector; onError: (m: string) => void; onConnect: () => void }) {
+function ConnectorCard({ c, onError, onConnect }: { c: Connector; onError: (m: string) => void; onConnect?: () => void }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [url, setUrl] = useState("");
@@ -80,12 +86,12 @@ function ConnectorCard({ c, onError, onConnect }: { c: Connector; onError: (m: s
             </span>
           </span>
         </button>
-        {c.connectable && (
+        {c.connectable && onConnect && (
           isLive
             ? <button className="btn btn-sm btn-done" onClick={onConnect} aria-label={`Manage ${c.name}`}>✓ Connected</button>
             : <button className="btn btn-sm btn-go" onClick={onConnect}>Connect</button>
         )}
-        {!c.connectable && <span className={`tag ${isLive ? "tag-go" : ""}`}>{isLive ? "live" : "demo"}</span>}
+        {(!c.connectable || !onConnect) && <span className={`tag ${isLive ? "tag-go" : ""}`}>{isLive ? "live" : "demo"}</span>}
       </div>
       {open && (
         <div className="conn-body">
@@ -94,7 +100,7 @@ function ConnectorCard({ c, onError, onConnect }: { c: Connector; onError: (m: s
           {!c.core && c.key !== "web" && (
             <div className="row">
               {c.key === "webhook" && <input className="grow" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://hooks.zapier.com/…" aria-label="Webhook URL" />}
-              <button className="btn" disabled={busy || (c.key === "webhook" && !url.startsWith("http"))} onClick={test}>
+              <button className="btn" disabled={!onConnect || busy || (c.key === "webhook" && !url.startsWith("http"))} onClick={test}>
                 {busy ? "Testing…" : isLive ? "Send test" : "Check"}
               </button>
             </div>
@@ -267,6 +273,11 @@ function ConnectDialog({ c, onClose, onError, onToast }: {
             </div>
           )}
 
+          {st && c.key === "github" && (signedIn || st.repo || st.needs_repo) && (
+            <RepoPicker st={st} busy={!!busy} onPicked={(r) => { setSt(r.setup); setMsg(r); loadConnectors(true).catch(() => {}); if (r.ok) onToast?.("🐙 GitHub connected"); }}
+                        onError={(m) => setMsg({ ok: false, message: m })} />
+          )}
+
           {st && c.key === "notion" && signedIn && (
             <NotionPicker st={st} busy={!!busy} onPicked={(r) => { setSt(r.setup); setMsg(r); loadConnectors(true).catch(() => {}); if (r.ok) onToast?.("📝 Notion connected"); }}
                           onError={(m) => setMsg({ ok: false, message: m })} />
@@ -290,6 +301,96 @@ function ConnectDialog({ c, onClose, onError, onToast }: {
       </div>
     </div>,
     document.body,
+  );
+}
+
+function RepoPicker({ st, busy, onPicked, onError }: {
+  st: ConnectorSetup; busy: boolean; onError: (m: string) => void;
+  onPicked: (r: { ok: boolean; message: string; setup: ConnectorSetup }) => void;
+}) {
+  const [repos, setRepos] = useState<{ full_name: string; private: boolean; open_issues: number }[] | null>(null);
+  const [q, setQ] = useState("");
+  useEffect(() => { api<{ repos: typeof repos }>("/api/oauth/github/repos").then((r) => setRepos(r.repos)).catch((e) => onError(e.message)); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const pick = async (full: string) => {
+    try { onPicked(await put("/api/setup/connectors/github", { values: { GITHUB_REPO: full } })); } catch (e: any) { onError(e.message); }
+  };
+  const shown = (repos ?? []).filter((r) => r.full_name.toLowerCase().includes(q.toLowerCase())).slice(0, 12);
+  return (
+    <div className="sheet-pick">
+      <h3>{st.repo ? "Agents work on" : "Pick the repo agents work on"}</h3>
+      {st.repo && <p><a href={`https://github.com/${st.repo}`} target="_blank" rel="noreferrer">🐙 {st.repo} ↗</a> <span className="muted">(a step can name another repo)</span></p>}
+      {!repos && <p className="muted">Loading your repos…</p>}
+      {repos && repos.length > 8 && <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter repos…" aria-label="Filter repos" />}
+      {repos && (
+        <div className="pick-list">
+          {shown.map((r) => (
+            <button key={r.full_name} className={`pick ${st.repo === r.full_name ? "on" : ""}`} disabled={busy} onClick={() => pick(r.full_name)}>
+              {r.private ? "🔒" : "📂"} {r.full_name}{st.repo === r.full_name && " ✓"}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Admin: MCP servers whose tools skills can be given (🧰 Tools on a skill). */
+function McpServers({ admin, onError, onToast }: { admin: boolean; onError: (m: string) => void; onToast?: (m: string) => void }) {
+  type Srv = { id: string; name: string; url: string; has_token: boolean; error: string; tools: { name: string; description: string; read_only: boolean }[] };
+  const [list, setList] = useState<Srv[]>([]);
+  const [name, setName] = useState("");
+  const [url, setUrl] = useState("");
+  const [token, setToken] = useState("");
+  const [busy, setBusy] = useState("");
+  const reload = () => api<Srv[]>("/api/mcp/servers").then(setList).catch(() => {});
+  useEffect(() => { reload(); }, []);
+  const add = async () => {
+    setBusy("add");
+    try {
+      const s = await post<Srv>("/api/mcp/servers", { name, url, token });
+      setName(""); setUrl(""); setToken(""); reload();
+      if (s.error) onError(`Added ${s.name}, but: ${s.error}`); else onToast?.(`🧩 ${s.name}: ${s.tools.length} tools`);
+    } catch (e: any) { onError(e.message); } finally { setBusy(""); }
+  };
+  const act = async (id: string, what: "refresh" | "remove") => {
+    setBusy(id);
+    try {
+      if (what === "refresh") await post(`/api/mcp/servers/${id}/refresh`); else await del(`/api/mcp/servers/${id}`);
+      reload();
+    } catch (e: any) { onError(e.message); } finally { setBusy(""); }
+  };
+  return (
+    <section>
+      <h3>🧩 MCP servers <small className="muted">· tools for skills</small></h3>
+      <p className="muted">Add a remote MCP server (Streamable HTTP) once; then tick it under 🧰 Tools on any skill. Its AI agent
+        step can call these tools by itself.</p>
+      <div className="conns">
+        {list.map((s) => (
+          <div key={s.id} className="conn">
+            <div className="conn-row">
+              <div className="conn-head">
+                <span className="conn-icon" aria-hidden>🧩</span>
+                <span className="grow"><b>{s.name}</b>
+                  <span className="muted">{s.error ? <span className="bad-line">{s.error}</span> : `${s.tools.length} tools · ${s.tools.slice(0, 4).map((t) => t.name).join(", ")}${s.tools.length > 4 ? "…" : ""}`}</span>
+                </span>
+              </div>
+              {admin && <button className="btn btn-sm" disabled={busy === s.id} onClick={() => act(s.id, "refresh")}>↻</button>}
+              {admin && <button className="btn btn-sm btn-bad" disabled={busy === s.id} onClick={() => act(s.id, "remove")} aria-label={`Remove ${s.name}`}>✕</button>}
+            </div>
+          </div>
+        ))}
+      </div>
+      {admin && (
+        <div className="manual-form mcp-add">
+          <div className="row tight">
+            <input className="grow" value={name} onChange={(e) => setName(e.target.value)} placeholder="Name (e.g. Linear)" aria-label="MCP server name" />
+          </div>
+          <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://mcp.example.com/mcp" aria-label="MCP server URL" />
+          <input type="password" value={token} onChange={(e) => setToken(e.target.value)} placeholder="Bearer token (optional)" aria-label="MCP token" autoComplete="off" />
+          <button className="btn btn-go" disabled={busy === "add" || !name.trim() || !url.startsWith("http")} onClick={add}>{busy === "add" ? "Connecting…" : "+ Add MCP server"}</button>
+        </div>
+      )}
+    </section>
   );
 }
 

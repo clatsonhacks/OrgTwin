@@ -534,3 +534,54 @@ button.mode-demo:not(:disabled):hover small { color: var(--ink); text-decoration
 .rebuild-btn:hover { background: #ffd866; }
 .rebuild-btn:active { transform: translateY(1px); box-shadow: 0 1px 0 var(--ink); }
 .rebuild-btn:focus-visible { outline: 3px solid #2864c7; outline-offset: 2px; }
+
+/* ---------- people, quests, requests, skill tools ---------- */
+.tick { width: 20px; height: 20px; border-radius: 50%; border: 2px solid #c9bfa6; background: #fff; display: inline-grid;
+  place-items: center; font-size: 12px; font-weight: 800; color: #fff; flex: none; }
+.quests .quest-bar { height: 8px; border: 2px solid var(--ink); border-radius: 6px; background: #fff; overflow: hidden; margin: 6px 0 8px; }
+.quests .quest-bar i { display: block; height: 100%; background: var(--grass); transition: width .4s; }
+.quest-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.quest-list li { display: flex; gap: 8px; align-items: flex-start; font-size: 14px; }
+.quest-list li small { display: block; color: var(--muted); font-size: 12px; }
+.quest-list li.done .tick, .dept-tick.on .tick { background: var(--grass); border-color: var(--grass-d); }
+.quest-list li.done b { color: var(--grass-d); }
+.dept-ticks { display: flex; flex-wrap: wrap; gap: 6px; }
+.dept-tick { display: inline-flex; align-items: center; gap: 6px; background: #fff; border: 2px solid #d9cdb2; border-radius: 999px;
+  padding: 4px 10px 4px 5px; cursor: pointer; font-size: 13px; }
+.dept-tick.on { border-color: var(--grass); background: #eef9e8; font-weight: 600; }
+.dept-tick:disabled { cursor: default; opacity: .85; }
+.dept-tick .tick { width: 18px; height: 18px; box-shadow: inset 0 0 0 2px var(--team, transparent); }
+.people { display: grid; gap: 8px; }
+.person-row, .me-card, .req, .invite-link, .claim { background: #fff; border: 2px solid #d9cdb2; border-radius: 8px; padding: 10px; display: grid; gap: 8px; }
+.me-card { border-color: var(--ink); }
+.claim, .invite-link { border-color: var(--gold-d); background: #fff8e1; }
+.p-avatar { width: 30px; height: 30px; border-radius: 50%; background: var(--diamond); color: var(--ink); border: 2px solid var(--ink);
+  display: inline-grid; place-items: center; font-family: var(--pixel); font-weight: 700; flex: none; }
+.person-actions { gap: 12px; }
+.bad-link { color: var(--red-d); }
+.tag-bad { background: #ffe1dc; color: var(--red-d); }
+.who { display: flex; align-items: center; gap: 8px; padding: 6px 10px; cursor: pointer; text-align: left; color: inherit; max-width: 220px; }
+.who-txt b { display: block; font-family: var(--pixel); font-size: 14px; }
+.who-txt small { display: block; font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 150px; }
+.requests { display: grid; gap: 8px; }
+.req { border-left: 6px solid var(--team, #999); }
+.req-team { color: var(--ink); }
+.req-result { margin: 0; white-space: pre-wrap; font-size: 13px; background: var(--paper); border-radius: 6px; padding: 8px; max-height: 220px; overflow: auto; }
+.btn-ask { background: #dff3ff; }
+.tool-chips { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; font-size: 12px; margin: 4px 0; }
+.chip-sm { font-size: 11px; padding: 1px 6px; }
+.tool-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+.tool-pick { display: flex; gap: 8px; align-items: center; cursor: pointer; }
+.tool-pick input, .tool-one input { margin: 0; }
+.mcp-pick { display: grid; gap: 6px; }
+.mcp-tools { display: flex; flex-wrap: wrap; gap: 6px; padding-left: 12px; }
+.tool-one { display: inline-flex; gap: 4px; align-items: center; font-size: 12px; background: #fff; border: 2px solid #d9cdb2; border-radius: 6px; padding: 2px 6px; cursor: pointer; }
+.tool-one.on { border-color: var(--grass); background: #eef9e8; }
+.tools-modal { width: min(560px, 100%); }
+.locked { background: #f4efe3; border-radius: 8px; padding: 8px 10px; }
+.mcp-add { margin-top: 8px; }
+@media (max-width: 720px) { .who-txt small { display: none; } .who { padding: 6px; } }
+.ask { display: flex; align-items: center; gap: 8px; padding: 6px 12px; cursor: pointer; text-align: left; color: inherit;
+  background: #dff3ff; font-size: 20px; }
+.ask:hover { filter: brightness(1.03); }
+@media (max-width: 900px) { .ask { display: none; } }

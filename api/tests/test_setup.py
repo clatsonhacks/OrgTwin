@@ -10,7 +10,8 @@ os.environ["DATABASE_URL"] = f"sqlite:///{tempfile.mkdtemp()}/test.db"
 os.environ["RUNNER"] = "local"
 os.environ["STEP_DELAY_S"] = "0"
 for k in ("GOOGLE_SHEET_ID", "GOOGLE_SERVICE_ACCOUNT_JSON", "SMTP_HOST", "STRIPE_SECRET_KEY", "DISCORD_WEBHOOK_URL",
-          "GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET", "STRIPE_CONNECT_CLIENT_ID", "STRIPE_CONNECT_SECRET_KEY"):
+          "GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET", "STRIPE_CONNECT_CLIENT_ID", "STRIPE_CONNECT_SECRET_KEY",
+          "GITHUB_TOKEN", "GITHUB_REPO"):
     os.environ.pop(k, None)
 
 import httpx  # noqa: E402

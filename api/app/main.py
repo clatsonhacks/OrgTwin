@@ -10,10 +10,11 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import desc, func, select
 
-from . import a2a, engine, graph, llm, oauth, orggen, skills, userconfig, workflows
+from . import a2a, access, agent, engine, graph, llm, mcp, oauth, orggen, skills, userconfig, workflows
 from .config import settings
 from .connectors import email, registry, sheets, slack
-from .db import Approval, Event, Org, Run, SessionLocal, Workflow, init_db
+from .db import Approval, Event, Org, Run, SessionLocal, User, Workflow, init_db
+from .db import Request as WorkRequest
 from .events import bus, sse_format
 
 @asynccontextmanager
@@ -29,9 +30,9 @@ app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins, allow_me
 _tasks: set[asyncio.Task] = set()
 
 
-def require_token(x_access_token: str = Header(default="")) -> None:
-    if settings.app_access_token and x_access_token != settings.app_access_token:
-        raise HTTPException(401, "missing or wrong X-Access-Token")
+# Any change needs a signed-in person once an admin exists (see access.py); before that, APP_ACCESS_TOKEN.
+require_token = access.actor
+require_admin = access.admin
 
 
 def _org_dict(org: Org | None) -> dict | None:
@@ -74,6 +75,163 @@ def auth_check():
     return {"ok": True}
 
 
+# ---------- people: admin, invites, departments ----------
+class NotifyIn(BaseModel):
+    slack: bool = True
+    discord: bool = True
+    slack_id: str = Field(default="", max_length=40)      # Slack member ID (U…) to @mention
+    discord_id: str = Field(default="", max_length=40)    # Discord user ID to @mention
+
+
+class PersonIn(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    email: str = Field(default="", max_length=200)
+    role: str = Field(default="member", pattern="^(admin|member)$")
+    departments: list[str] = Field(default_factory=list, max_length=50)
+    notify: NotifyIn = Field(default_factory=NotifyIn)
+
+
+class PersonUpdateIn(BaseModel):
+    name: str | None = Field(default=None, max_length=120)
+    email: str | None = Field(default=None, max_length=200)
+    role: str | None = Field(default=None, pattern="^(admin|member)$")
+    departments: list[str] | None = Field(default=None, max_length=50)
+    notify: NotifyIn | None = None
+
+
+class ClaimIn(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    email: str = Field(default="", max_length=200)
+
+
+def _valid_departments(keys: list[str]) -> list[str]:
+    with SessionLocal() as s:
+        org = _latest_org(s)
+    known = {t["key"] for t in (org.data["teams"] if org else [])}
+    bad = [k for k in keys if k not in known]
+    if bad:
+        raise HTTPException(400, f"unknown department(s): {', '.join(bad)}")
+    return list(dict.fromkeys(keys))
+
+
+@app.get("/api/me")
+def me(who: access.Actor | None = Depends(access.viewer)):
+    """Who is signed in, and whether people mode is on."""
+    on = access.enabled()
+    return {"people_mode": on, "setup_needed": not on,
+            "user": access.user_dict(who.user) if who and who.user else None,
+            "admin": bool(who and who.admin), "can_edit": (["*"] if who and who.admin else who.departments() if who else [])}
+
+
+@app.post("/api/people/claim")
+def claim_admin(body: ClaimIn, x_access_token: str = Header(default="")):
+    """The first person becomes the admin (needs APP_ACCESS_TOKEN when one is set). Returns their sign-in token."""
+    if access.enabled():
+        raise HTTPException(409, "there is already an admin — ask them for an invite link")
+    if settings.app_access_token and x_access_token != settings.app_access_token:
+        raise HTTPException(401, "enter the access code first")
+    token, h = access.new_token()
+    with SessionLocal() as s:
+        u = User(name=body.name.strip(), email=body.email.strip(), role="admin", departments=[], token_hash=h, joined=True,
+                 notify={"slack": True, "discord": True})
+        s.add(u)
+        s.commit()
+        out = access.user_dict(u, token)
+    bus.emit("people.changed", {"admin": out["name"]})
+    return out
+
+
+@app.get("/api/people")
+def list_people(who: access.Actor | None = Depends(access.viewer)):
+    if access.enabled() and who is None:
+        raise HTTPException(401, "sign in to see your team")
+    with SessionLocal() as s:
+        return [access.user_dict(u) for u in s.scalars(select(User).order_by(User.id))]
+
+
+@app.post("/api/people")
+def invite_person(body: PersonIn, who: access.Actor = Depends(require_admin)):
+    """Add a person and get their personal sign-in link (send it to them; it works like a password)."""
+    deps = _valid_departments(body.departments)
+    token, h = access.new_token()
+    with SessionLocal() as s:
+        u = User(name=body.name.strip(), email=body.email.strip(), role=body.role, departments=deps, token_hash=h,
+                 notify=body.notify.model_dump())
+        s.add(u)
+        s.commit()
+        out = access.user_dict(u, token)
+    bus.emit("people.changed", {"invited": out["name"], "departments": deps})
+    return out
+
+
+@app.put("/api/people/{user_id}")
+def update_person(user_id: int, body: PersonUpdateIn, who: access.Actor = Depends(require_token)):
+    """Admins change anything; people can change their own name and notification settings."""
+    own = who.user is not None and who.user.id == user_id
+    if not who.admin and not (own and body.role is None and body.departments is None):
+        raise HTTPException(403, "only an admin can change roles and departments")
+    with SessionLocal() as s:
+        u = s.get(User, user_id)
+        if not u:
+            raise HTTPException(404, "person not found")
+        if body.role == "member" and u.role == "admin":
+            admins = s.scalar(select(func.count()).select_from(User).where(User.role == "admin"))
+            if admins <= 1:
+                raise HTTPException(400, "keep at least one admin")
+        if body.departments is not None:
+            u.departments = _valid_departments(body.departments)
+        for k in ("name", "email", "role"):
+            if getattr(body, k) is not None:
+                setattr(u, k, getattr(body, k).strip())
+        if body.notify is not None:
+            u.notify = body.notify.model_dump()
+        s.commit()
+        out = access.user_dict(u)
+    bus.emit("people.changed", {"updated": out["name"]})
+    return out
+
+
+@app.post("/api/people/{user_id}/link")
+def new_invite_link(user_id: int, who: access.Actor = Depends(require_admin)):
+    """Make a fresh sign-in link (the old one stops working)."""
+    token, h = access.new_token()
+    with SessionLocal() as s:
+        u = s.get(User, user_id)
+        if not u:
+            raise HTTPException(404, "person not found")
+        u.token_hash, u.joined = h, False
+        s.commit()
+        return access.user_dict(u, token)
+
+
+@app.delete("/api/people/{user_id}")
+def remove_person(user_id: int, who: access.Actor = Depends(require_admin)):
+    with SessionLocal() as s:
+        u = s.get(User, user_id)
+        if not u:
+            raise HTTPException(404, "person not found")
+        if u.role == "admin" and s.scalar(select(func.count()).select_from(User).where(User.role == "admin")) <= 1:
+            raise HTTPException(400, "keep at least one admin")
+        s.delete(u)
+        s.commit()
+    bus.emit("people.changed", {"removed": user_id})
+    return {"ok": True}
+
+
+class JoinIn(BaseModel):
+    token: str = Field(min_length=8, max_length=100)
+
+
+@app.post("/api/people/join")
+def join(body: JoinIn):
+    """Check an invite link's token and say who it belongs to."""
+    u = access.user_by_token(body.token)
+    if not u:
+        raise HTTPException(401, "this invite link is not valid any more — ask your admin for a new one")
+    bus.emit("people.changed", {"joined": u.name})
+    return access.user_dict(u)
+
+
 # ---------- org ----------
 class OrgIn(BaseModel):
     description: str = Field(default="", max_length=4000)
@@ -81,7 +239,7 @@ class OrgIn(BaseModel):
     csv: str = Field(default="", max_length=200_000)
 
 
-@app.post("/api/org/generate", dependencies=[Depends(require_token)])
+@app.post("/api/org/generate", dependencies=[Depends(require_admin)])
 async def generate_org(body: OrgIn):
     if not (body.description.strip() or body.url.strip() or body.csv.strip()):
         raise HTTPException(400, "describe the company, give a URL, or upload a CSV")
@@ -155,8 +313,9 @@ def list_workflows(team: str | None = None):
         return [_wf_dict(w) for w in s.scalars(q.order_by(Workflow.id))]
 
 
-@app.post("/api/workflows/generate", dependencies=[Depends(require_token)])
-async def generate_workflow(body: WorkflowGenIn):
+@app.post("/api/workflows/generate")
+async def generate_workflow(body: WorkflowGenIn, who: access.Actor = Depends(require_token)):
+    access.require_edit(who, body.team_key, "workflows")
     with SessionLocal() as s:
         org = _latest_org(s)
     if not org:
@@ -259,12 +418,14 @@ def suggest_skills(team: str, role: str, goal: str = "", person: str | None = No
     return graph.relevant_skills(goal, t["key"], r["key"], person, _skills(org.id))
 
 
-@app.put("/api/workflows/{wf_id}", dependencies=[Depends(require_token)])
-def update_workflow(wf_id: int, body: WorkflowUpdateIn):
+@app.put("/api/workflows/{wf_id}")
+def update_workflow(wf_id: int, body: WorkflowUpdateIn, who: access.Actor = Depends(require_token)):
     with SessionLocal() as s:
         w = s.get(Workflow, wf_id)
         if not w:
             raise HTTPException(404, "workflow not found")
+        if w.kind != "flow":  # skills and drafts belong to a department; cross-team flows to everyone
+            access.require_edit(who, w.team_key)
         if w.kind == "hero":
             raise HTTPException(400, "the hero workflow is fixed in this version")
         steps = workflows.normalize(body.steps)
@@ -279,8 +440,8 @@ def update_workflow(wf_id: int, body: WorkflowUpdateIn):
         return _wf_dict(w)
 
 
-@app.put("/api/workflows/{wf_id}/assign", dependencies=[Depends(require_token)])
-def assign_workflow(wf_id: int, body: AssignIn):
+@app.put("/api/workflows/{wf_id}/assign")
+def assign_workflow(wf_id: int, body: AssignIn, who: access.Actor = Depends(require_token)):
     """Give a workflow / skill to one specific person (desk) inside a department."""
     _, team, role = _team_role(body.team_key, body.role_key)
     _check_person(role, body.person)
@@ -288,6 +449,8 @@ def assign_workflow(wf_id: int, body: AssignIn):
         w = s.get(Workflow, wf_id)
         if not w:
             raise HTTPException(404, "workflow not found")
+        access.require_edit(who, w.team_key)
+        access.require_edit(who, team["key"])
         if w.kind == "hero" and (w.team_key, w.role_key) != (team["key"], role["key"]):
             raise HTTPException(400, "the hero workflow can only move between people in its own role")
         w.team_key, w.role_key = team["key"], role["key"]
@@ -328,8 +491,9 @@ class SkillIn(BaseModel):
     meta: dict = Field(default_factory=dict)
 
 
-@app.post("/api/skills/analyze", dependencies=[Depends(require_token)])
-async def analyze_skill(body: AnalyzeIn):
+@app.post("/api/skills/analyze")
+async def analyze_skill(body: AnalyzeIn, who: access.Actor = Depends(require_token)):
+    access.require_edit(who, body.team_key)
     if any(len(f) > 1_500_000 for f in body.frames):
         raise HTTPException(413, "a frame is too large; send JPEG keyframes under ~1 MB")
     if not body.transcript.strip() and not body.frames:
@@ -341,10 +505,12 @@ async def analyze_skill(body: AnalyzeIn):
     return out
 
 
-@app.post("/api/skills", dependencies=[Depends(require_token)])
-def save_skill(body: SkillIn):
+@app.post("/api/skills")
+def save_skill(body: SkillIn, who: access.Actor = Depends(require_token)):
+    access.require_edit(who, body.team_key)
     org, team, role = _team_role(body.team_key, body.role_key)
-    meta = {k: v for k, v in body.meta.items() if k != "frames"}  # never persist frames
+    meta = {k: v for k, v in body.meta.items() if k not in ("frames", "tools")}  # never persist frames
+    meta["created_by"] = who.name
     _check_person(role, meta.get("person"))
     with SessionLocal() as s:
         w = Workflow(org_id=org.id, team_key=team["key"], role_key=role["key"], name=body.name, goal=body.name,
@@ -475,14 +641,283 @@ def list_approvals(status: str = "pending"):
                  "created_at": a.created_at} for a in s.scalars(q.limit(50))]
 
 
-@app.post("/api/approvals/{approval_id}", dependencies=[Depends(require_token)])
-def decide(approval_id: int, body: DecisionIn):
+@app.post("/api/approvals/{approval_id}")
+def decide(approval_id: int, body: DecisionIn, who: access.Actor = Depends(require_token)):
+    with SessionLocal() as s:
+        a = s.get(Approval, approval_id)
+        team = a.team_key if a else ""
+    if who.user and not who.can_edit(team):
+        raise HTTPException(403, f"only the {team} department (or an admin) can approve this")
     try:
-        return engine.decide(approval_id, body.approved, body.who)
+        return engine.decide(approval_id, body.approved, who.user.name if who.user else body.who)
     except KeyError:
         raise HTTPException(404, "approval not found")
     except ValueError as e:
         raise HTTPException(409, str(e))
+
+
+# ---------- skill tools: MCP servers + connectors a skill may use ----------
+class MCPServerIn(BaseModel):
+    name: str = Field(min_length=1, max_length=60)
+    url: str = Field(min_length=8, max_length=500)
+    token: str = Field(default="", max_length=2000)
+
+
+@app.get("/api/mcp/servers")
+def mcp_servers():
+    return [mcp.public(x) for x in mcp.servers()]
+
+
+@app.post("/api/mcp/servers", dependencies=[Depends(require_admin)])
+async def add_mcp_server(body: MCPServerIn):
+    """Add an MCP server (Streamable HTTP) and list its tools."""
+    try:
+        srv = await mcp.add(body.name, body.url, body.token)
+    except registry.UnsafeURL as e:
+        raise HTTPException(400, str(e))
+    bus.emit("mcp.changed", {"server": srv["id"], "tools": len(srv["tools"])})
+    return mcp.public(srv)
+
+
+@app.post("/api/mcp/servers/{server_id}/refresh", dependencies=[Depends(require_admin)])
+async def refresh_mcp_server(server_id: str):
+    try:
+        return mcp.public(await mcp.refresh(server_id))
+    except mcp.MCPError as e:
+        raise HTTPException(404, str(e))
+
+
+@app.delete("/api/mcp/servers/{server_id}", dependencies=[Depends(require_admin)])
+def remove_mcp_server(server_id: str):
+    mcp.remove(server_id)
+    bus.emit("mcp.changed", {"removed": server_id})
+    return {"ok": True}
+
+
+@app.get("/api/tools")
+def tool_catalog():
+    """Everything a skill can be given access to (connectors and MCP servers with their tools)."""
+    return agent.catalog()
+
+
+class ToolsIn(BaseModel):
+    tools: list[str] = Field(default_factory=list, max_length=100)
+
+
+@app.put("/api/workflows/{wf_id}/tools")
+def set_skill_tools(wf_id: int, body: ToolsIn, who: access.Actor = Depends(require_token)):
+    """Choose which tools a skill may use. Empty = no limit (and no tools for its AI agent step)."""
+    try:
+        grants = agent.valid_grants(body.tools)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    with SessionLocal() as s:
+        w = s.get(Workflow, wf_id)
+        if not w:
+            raise HTTPException(404, "workflow not found")
+        if w.kind == "hero":
+            raise HTTPException(400, "the hero workflow is fixed in this version")
+        access.require_edit(who, w.team_key)
+        w.meta = {**(w.meta or {}), "tools": grants}
+        s.commit()
+        out = _wf_dict(w)
+    bus.emit("skill.tools", {"workflow_id": wf_id, "tools": grants, "name": out["name"]})
+    return out
+
+
+# ---------- requests: ask any team; the best skill runs and its owners hear about it ----------
+class RequestIn(BaseModel):
+    text: str = Field(min_length=3, max_length=4000)
+    from_team: str = Field(default="", max_length=80)
+    workflow_id: int | None = None   # pick a skill yourself instead of letting OrgTwin choose
+
+
+_ROUTE_SYSTEM = """You route a work request to the one skill that can do it.
+Skills (id · department · name · what it does):
+{skills}
+Reply with ONLY JSON: {{"skill_id": <id or null if none fits>, "why": "<one short sentence>"}}."""
+
+
+async def _route(text: str, skills: list[dict], from_team: str) -> tuple[dict | None, str]:
+    if not skills:
+        return None, "no skills exist yet"
+    by_id = {w["id"]: w for w in skills}
+
+    def offline():
+        best = graph.relevant_skills(text, from_team or "-", "-", None, skills, limit=1, min_score=0.2)
+        return {"skill_id": best[0]["id"], "why": f"matched: {', '.join(best[0]['matched'][:5])}"} if best else \
+            {"skill_id": None, "why": "no skill matched the words in the request"}
+    lines = "\n".join(f"{w['id']} · {w['team_key']} · {w['name']} · " +
+                      "; ".join(st.get("title", "") for st in w["steps"][:6]) for w in skills)
+    data, _, _ = await llm.complete_json(_ROUTE_SYSTEM.format(skills=lines), f"Request: {text}", fallback=offline)
+    if not isinstance(data, dict):
+        data = offline()
+    sid = data.get("skill_id")
+    try:
+        sid = int(sid) if sid is not None else None
+    except (TypeError, ValueError):
+        sid = None
+    if sid not in by_id:
+        data = offline()
+        sid = data.get("skill_id")
+    return by_id.get(sid), str(data.get("why") or "")[:300]
+
+
+def _req_dict(r: WorkRequest) -> dict:
+    return {"id": r.id, "text": r.text, "from_name": r.from_name, "from_team": r.from_team, "workflow_id": r.workflow_id,
+            "team_key": r.team_key, "run_id": r.run_id, "status": r.status, "why": r.why, "result": r.result,
+            "notified": r.notified or [], "created_at": r.created_at.isoformat() if r.created_at else None}
+
+
+def _update_req(req_id: int, **kv) -> dict:
+    with SessionLocal() as s:
+        r = s.get(WorkRequest, req_id)
+        for k, v in kv.items():
+            setattr(r, k, v)
+        s.commit()
+        out = _req_dict(r)
+    bus.emit("request.updated", out)
+    return out
+
+
+async def _notify(team_key: str, team_name: str, text: str, requester: User | None) -> list[dict]:
+    """Tell a department's owners in Slack and/or Discord (each person picks; @mentions when their IDs are set)."""
+    owners = access.owners_of(team_key)
+    sent = []
+    for channel in ("slack", "discord"):
+        people = [u for u in owners if (u.notify or {}).get(channel, True)]
+        if not people:
+            continue
+        idk = f"{channel}_id"
+        mentions = " ".join((f"<@{u.notify[idk]}>" if (u.notify or {}).get(idk) else u.name) for u in people)
+        cc = ""
+        if requester and (requester.notify or {}).get(idk):
+            cc = f" · cc <@{requester.notify[idk]}>"
+        msg = f"{text}\n👤 {team_name}: {mentions}{cc}"
+        try:
+            if channel == "slack":
+                rec = await slack.post(msg)
+                mode = rec["mode"]
+            else:
+                rec = await registry.run("discord", "post", {"text": msg})
+                mode = rec["mode"]
+            sent.append({"channel": channel, "mode": mode, "to": [u.name for u in people]})
+        except Exception as e:  # a broken webhook must not fail the request
+            sent.append({"channel": channel, "error": f"{type(e).__name__}: {e}"[:200], "to": [u.name for u in people]})
+    return sent
+
+
+_request_lock = asyncio.Lock()
+
+
+async def _serve_request(req_id: int, wf: dict, team_names: dict, inputs: dict, requester_id: int | None) -> None:
+    """Wait for a free slot, run the skill with the request as input, then tell the skill's owners."""
+    team_name = team_names.get(wf["team_key"], wf["team_key"])
+    for _ in range(600):  # one run at a time (the world shows one); wait up to ~10 min
+        async with _request_lock:
+            with SessionLocal() as s:
+                busy = s.scalars(select(Run).where(Run.status.in_(["running", "waiting_approval"]))).first()
+                if not busy:
+                    run = Run(org_id=wf["org_id"], workflow_id=wf["id"], status="running", context={"request_id": req_id})
+                    s.add(run)
+                    s.commit()
+                    run_id = run.id
+                    break
+        await asyncio.sleep(1)
+    else:
+        _update_req(req_id, status="failed", result="timed out waiting for another run to finish")
+        return
+    _update_req(req_id, status="running", run_id=run_id)
+    await engine.run_workflow(run_id, wf, team_names, inputs)
+    with SessionLocal() as s:
+        run = s.get(Run, run_id)
+        status, ctx = run.status, run.context or {}
+        err = next((e.payload.get("error", "") for e in s.scalars(
+            select(Event).where(Event.run_id == run_id, Event.type == "run.failed").order_by(desc(Event.id)).limit(1))), "")
+        requester = s.get(User, requester_id) if requester_id else None
+    outs = [st["params"].get("save_as") for st in wf["steps"] if st.get("params", {}).get("save_as")]
+    vars_ = ctx.get("vars") or {}
+    result = next((vars_[k] for k in reversed(outs) if vars_.get(k)), "") if status == "completed" else err
+    if status == "completed" and not result:
+        result = f"Done — {wf['name']} ran" + (f" for {ctx.get('rows')} row(s)." if ctx.get("rows") else ".")
+    head = f"📥 Request from {inputs.get('requested_by')} ({inputs.get('requester_team') or 'someone'}): “{inputs['request'][:300]}”"
+    if status == "completed":
+        note = f"{head}\n✅ Your skill “{wf['name']}” handled it. Result:\n{result[:1200]}"
+    else:
+        note = f"{head}\n⚠️ Your skill “{wf['name']}” could not finish: {(result or status)[:400]}"
+    notified = await _notify(wf["team_key"], team_name, note, requester)
+    _update_req(req_id, status="done" if status == "completed" else "failed", result=result[:8000], notified=notified)
+
+
+@app.post("/api/requests")
+async def make_request(body: RequestIn, who: access.Actor = Depends(require_token)):
+    """“I need an analysis of …” — OrgTwin picks the best skill in any department, runs it with the request
+    as input ({{request}}), and tells that department's people in Slack / Discord."""
+    with SessionLocal() as s:
+        org = _latest_org(s)
+        if not org:
+            raise HTTPException(400, "generate an org first")
+        requester = s.get(User, who.id) if who.id else None
+    from_team = body.from_team or (who.departments()[0] if who.departments() else "")
+    candidates = [w for w in _skills(org.id) if w["executable"]]
+    if body.workflow_id is not None:
+        wf = next((w for w in candidates if w["id"] == body.workflow_id), None)
+        if not wf:
+            raise HTTPException(404, "that skill does not exist or cannot run")
+        why = "picked by the person asking"
+    else:
+        wf, why = await _route(body.text, candidates, from_team)
+    teams = {t["key"]: t["name"] for t in org.data["teams"]}
+    with SessionLocal() as s:
+        r = WorkRequest(org_id=org.id, text=body.text.strip(), from_user_id=who.id, from_name=who.name, from_team=from_team,
+                        workflow_id=wf["id"] if wf else None, team_key=wf["team_key"] if wf else "",
+                        status="queued" if wf else "no_skill", why=why)
+        s.add(r)
+        s.commit()
+        out = _req_dict(r)
+    bus.emit("request.created", out)
+    if not wf:  # nobody has a skill for this yet: ask the most likely department to make one
+        guess = workflows._guess_team(body.text, org.data["teams"]) or next(iter(teams), "")
+        note = (f"📥 Request from {who.name} ({teams.get(from_team, from_team) or 'someone'}): “{body.text[:300]}”\n"
+                f"🛠 No skill can do this yet. Could {teams.get(guess, guess)} record one?")
+        notified = await _notify(guess, teams.get(guess, guess), note, requester) if guess else []
+        return _update_req(out["id"], team_key=guess, notified=notified)
+    inputs = {"request": body.text.strip(), "requested_by": who.name, "requester_team": teams.get(from_team, from_team)}
+    t = asyncio.create_task(_serve_request(out["id"], wf, teams, inputs, who.id))
+    _tasks.add(t)
+    t.add_done_callback(_tasks.discard)
+    return out
+
+
+@app.get("/api/requests")
+def list_requests(limit: int = 30):
+    with SessionLocal() as s:
+        return [_req_dict(r) for r in s.scalars(select(WorkRequest).order_by(desc(WorkRequest.id)).limit(min(limit, 100)))]
+
+
+# ---------- quests: the setup checklist (green ticks) ----------
+@app.get("/api/quests")
+def quests():
+    with SessionLocal() as s:
+        org = _latest_org(s)
+        users = list(s.scalars(select(User)))
+        skills_ = list(s.scalars(select(Workflow).where(Workflow.kind == "skill"))) if org else []
+        reqs = list(s.scalars(select(WorkRequest).order_by(desc(WorkRequest.id)).limit(50)))
+    live = [c for c in list_connectors() if c["mode"] == "live" and c["key"] != "web"]
+    q = [
+        ("org", "Build your company", bool(org), "Describe it or upload an org CSV"),
+        ("admin", "Become the admin", bool(users), "👥 People → Become admin"),
+        ("connect", "Connect an app", bool(live), "🔌 Connectors → Connect (Slack or Discord first)"),
+        ("invite", "Invite a teammate", len(users) > 1, "👥 People → Invite someone from IT"),
+        ("assign", "Give someone a department", any(u.role != "admin" and u.departments for u in users),
+         "Tick the departments they look after"),
+        ("skill", "Create a skill", bool(skills_), "Click a worker → Record a skill"),
+        ("tools", "Give a skill tools", any((w.meta or {}).get("tools") for w in skills_), "📘 Skill → 🧰 Tools (MCP, GitHub…)"),
+        ("request", "Send a cross-team request", bool(reqs), "📥 Ask a team: “I need an analysis of …”"),
+        ("notified", "Owner notified in Slack / Discord", any(any(n.get("mode") for n in (r.notified or [])) for r in reqs),
+         "Happens when a request finishes"),
+    ]
+    return [{"key": k, "title": t, "done": d, "hint": h} for k, t, d, h in q]
 
 
 # ---------- outbox / audit / metrics ----------
@@ -518,7 +953,7 @@ class ConnectorTestIn(BaseModel):
     url: str = Field(default="", max_length=2000)
 
 
-@app.post("/api/connectors/{key}/test", dependencies=[Depends(require_token)])
+@app.post("/api/connectors/{key}/test", dependencies=[Depends(require_admin)])
 async def test_connector(key: str, body: ConnectorTestIn | None = None):
     if key not in registry.CONNECTORS:
         raise HTTPException(404, "unknown connector (core connectors are tested by running the lead-to-cash demo)")
@@ -548,6 +983,8 @@ def _connection(key: str) -> dict:
             "account": account, "needs_sheet": key == "sheets" and bool(account) and not settings.sheet_id,
             "sheet_id": settings.sheet_id if key == "sheets" else "",
             "needs_database": key == "notion" and bool(account) and not settings.notion_database_id,
+            "needs_repo": key == "github" and bool(settings.github_token) and not settings.github_repo,
+            "repo": settings.github_repo if key == "github" else "",
             "database_id": settings.notion_database_id if key == "notion" else ""}
 
 
@@ -585,7 +1022,7 @@ async def _test_after_save(key: str) -> dict:
         return {"ok": False, "message": f"Saved, but the check failed: {type(e).__name__}: {e}"[:300]}
 
 
-@app.put("/api/setup/connectors/{key}", dependencies=[Depends(require_token)])
+@app.put("/api/setup/connectors/{key}", dependencies=[Depends(require_admin)])
 async def save_connector(key: str, body: ConnectorValuesIn):
     """Save what the user typed in the Connect popup, then check the connection."""
     if key not in userconfig.CONNECTOR_SETUP:
@@ -600,7 +1037,7 @@ async def save_connector(key: str, body: ConnectorValuesIn):
     return {**result, "setup": _connection(key)}
 
 
-@app.delete("/api/setup/connectors/{key}", dependencies=[Depends(require_token)])
+@app.delete("/api/setup/connectors/{key}", dependencies=[Depends(require_admin)])
 async def disconnect_connector(key: str):
     """Forget the connector's saved values; for Google/Stripe also sign out (revokes the app's access)."""
     if key not in userconfig.CONNECTOR_SETUP:
@@ -612,7 +1049,7 @@ async def disconnect_connector(key: str):
     return {"ok": True, "setup": _connection(key)}
 
 
-@app.post("/api/oauth/{provider}/start", dependencies=[Depends(require_token)])
+@app.post("/api/oauth/{provider}/start", dependencies=[Depends(require_admin)])
 def oauth_start(provider: str):
     """The URL the Connect popup opens: the provider's own sign-in and "Allow access" screen."""
     try:
@@ -637,7 +1074,7 @@ async def oauth_callback(provider: str, code: str = "", state: str = "", error: 
     return oauth.popup_page(provider, True, msg)
 
 
-@app.get("/api/oauth/notion/databases", dependencies=[Depends(require_token)])
+@app.get("/api/oauth/notion/databases", dependencies=[Depends(require_admin)])
 async def notion_databases():
     """Databases and pages the user shared with OrgTwin while signing in to Notion."""
     if "notion" not in userconfig.oauth_state():
@@ -653,7 +1090,7 @@ class NotionPickIn(BaseModel):
     create_in_page: str = Field(default="", max_length=100)
 
 
-@app.post("/api/oauth/notion/database", dependencies=[Depends(require_token)])
+@app.post("/api/oauth/notion/database", dependencies=[Depends(require_admin)])
 async def notion_pick_database(body: NotionPickIn):
     """Use one of the shared databases, or create an "OrgTwin" database inside a shared page."""
     if "notion" not in userconfig.oauth_state():
@@ -671,7 +1108,18 @@ async def notion_pick_database(body: NotionPickIn):
     return {**result, "setup": _connection("notion")}
 
 
-@app.post("/api/connect/telegram/start", dependencies=[Depends(require_token)])
+@app.get("/api/oauth/github/repos", dependencies=[Depends(require_admin)])
+async def github_repos():
+    """Repos the connected GitHub account can reach (newest first), to pick the default one."""
+    if not settings.github_token:
+        raise HTTPException(400, "connect GitHub first")
+    try:
+        return {"repos": await oauth.github_repos(), "current": settings.github_repo}
+    except RuntimeError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/connect/telegram/start", dependencies=[Depends(require_admin)])
 async def telegram_start():
     """A t.me link to OrgTwin's bot carrying a one-time code; the user taps Start and we learn the chat."""
     try:
@@ -680,7 +1128,7 @@ async def telegram_start():
         raise HTTPException(400, str(e))
 
 
-@app.get("/api/connect/telegram/check", dependencies=[Depends(require_token)])
+@app.get("/api/connect/telegram/check", dependencies=[Depends(require_admin)])
 async def telegram_check(code: str):
     try:
         out = await oauth.telegram_check(code)
@@ -693,7 +1141,7 @@ async def telegram_check(code: str):
     return {**out, "setup": _connection("telegram")}
 
 
-@app.post("/api/oauth/google/sample-sheet", dependencies=[Depends(require_token)])
+@app.post("/api/oauth/google/sample-sheet", dependencies=[Depends(require_admin)])
 async def google_sample_sheet():
     """Create a ready-made CRM sheet with sample leads in the signed-in user's Google Drive and use it."""
     if not settings.google_signed_in():
@@ -734,7 +1182,7 @@ def metrics():
     }
 
 
-@app.post("/api/demo/reset", dependencies=[Depends(require_token)])
+@app.post("/api/demo/reset", dependencies=[Depends(require_admin)])
 def demo_reset():
     sheets.reset_mock()
     return {"ok": True}

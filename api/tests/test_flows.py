@@ -8,7 +8,7 @@ os.environ["DATABASE_URL"] = f"sqlite:///{tempfile.mkdtemp()}/test.db"
 os.environ["RUNNER"] = "local"
 os.environ["STEP_DELAY_S"] = "0"
 for k in ("VULTR_INFERENCE_API_KEY", "STRIPE_SECRET_KEY", "SLACK_WEBHOOK_URL", "SMTP_HOST", "GOOGLE_SHEET_ID",
-          "TAVILY_API_KEY", "BRAVE_SEARCH_API_KEY"):
+          "TAVILY_API_KEY", "BRAVE_SEARCH_API_KEY", "GITHUB_TOKEN", "GITHUB_REPO"):
     os.environ.pop(k, None)
 
 import httpx  # noqa: E402

@@ -85,3 +85,41 @@ class AppSetting(Base):
     __tablename__ = "app_settings"
     key: Mapped[str] = mapped_column(String(80), primary_key=True)
     value: Mapped[dict] = mapped_column(JSON)
+
+
+class User(Base):
+    """A person who uses OrgTwin. The first one is the admin; the admin invites everyone else.
+
+    role: "admin" (everything) or "member". departments: team keys where this person may create and
+    edit skills. Everyone signed in can see and run every skill. token_hash: sha256 of the personal
+    sign-in token in their invite link (the token itself is never stored).
+    """
+    __tablename__ = "users"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(120))
+    email: Mapped[str] = mapped_column(String(200), default="")
+    role: Mapped[str] = mapped_column(String(20), default="member")
+    departments: Mapped[list] = mapped_column(JSON, default=list)
+    notify: Mapped[dict] = mapped_column(JSON, default=dict)  # {"slack": bool, "discord": bool, "slack_id", "discord_id"}
+    token_hash: Mapped[str] = mapped_column(String(64), default="")
+    joined: Mapped[bool] = mapped_column(default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class Request(Base):
+    """Someone asks for work ("I need an analysis of …"); OrgTwin runs the best skill and tells its owners."""
+    __tablename__ = "requests"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    org_id: Mapped[int] = mapped_column(Integer)
+    text: Mapped[str] = mapped_column(Text)
+    from_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    from_name: Mapped[str] = mapped_column(String(120), default="")
+    from_team: Mapped[str] = mapped_column(String(80), default="")
+    workflow_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    team_key: Mapped[str] = mapped_column(String(80), default="")   # the department that owns the skill
+    run_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="routing")  # routing|queued|running|done|failed|no_skill
+    why: Mapped[str] = mapped_column(Text, default="")
+    result: Mapped[str] = mapped_column(Text, default="")
+    notified: Mapped[list] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)

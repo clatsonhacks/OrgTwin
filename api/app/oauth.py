@@ -39,6 +39,7 @@ SLACK_TOKEN = "https://slack.com/api/oauth.v2.access"
 DISCORD_TOKEN = "https://discord.com/api/oauth2/token"
 HUBSPOT_TOKEN = "https://api.hubapi.com/oauth/v1/token"
 HUBSPOT_SCOPES = "crm.objects.contacts.read crm.objects.contacts.write"
+GITHUB_TOKEN = "https://github.com/login/oauth/access_token"
 
 
 class OAuthError(RuntimeError):
@@ -229,6 +230,40 @@ async def hubspot_token() -> str:
     return tok["access_token"]
 
 
+# ---------------- GitHub (OAuth app; repo scope for PRs, issues and contents) ----------------
+
+def _github_auth(ru: str, state: str) -> str:
+    return _url("https://github.com/login/oauth/authorize", {
+        "client_id": _cid("github"), "redirect_uri": ru, "scope": "repo", "state": state, "allow_signup": "false"})
+
+
+async def _github_exchange(c: httpx.AsyncClient, code: str) -> str:
+    r = await c.post(GITHUB_TOKEN, headers={"Accept": "application/json"},
+                     data={"client_id": _cid("github"), "client_secret": _csecret("github"), "code": code,
+                           "redirect_uri": redirect_uri("github")})
+    tok = r.json() if r.status_code < 400 else {}
+    if not tok.get("access_token"):
+        raise OAuthError(f"GitHub did not accept the sign-in ({tok.get('error_description') or tok.get('error') or r.status_code})")
+    me = await c.get("https://api.github.com/user", headers={"Authorization": f"Bearer {tok['access_token']}",
+                                                              "User-Agent": "OrgTwin"})
+    login = me.json().get("login", "GitHub") if me.status_code < 400 else "GitHub"
+    userconfig.save_oauth("github", {"access_token": tok["access_token"], "name": login})
+    if settings.github_repo:
+        return f"Connected GitHub ({login}) — agents use {settings.github_repo}."
+    return f"Connected GitHub ({login}). Now pick the repo agents should work on."
+
+
+async def github_repos() -> list[dict]:
+    async with httpx.AsyncClient(timeout=20) as c:
+        r = await c.get("https://api.github.com/user/repos", params={"sort": "updated", "per_page": 50},
+                        headers={"Authorization": f"Bearer {settings.github_token}", "User-Agent": "OrgTwin",
+                                 "Accept": "application/vnd.github+json"})
+    if r.status_code >= 400:
+        raise RuntimeError(f"GitHub returned HTTP {r.status_code}")
+    return [{"full_name": x["full_name"], "private": x["private"], "open_issues": x.get("open_issues_count", 0)}
+            for x in r.json()]
+
+
 PROVIDERS: dict[str, Provider] = {p.key: p for p in [
     Provider("google", "Google", "google_oauth_client_id", "google_oauth_client_secret",
              ("GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET"), _google_auth, _google_exchange),
@@ -242,11 +277,14 @@ PROVIDERS: dict[str, Provider] = {p.key: p for p in [
              ("DISCORD_CLIENT_ID", "DISCORD_CLIENT_SECRET"), _discord_auth, _discord_exchange),
     Provider("hubspot", "HubSpot", "hubspot_client_id", "hubspot_client_secret",
              ("HUBSPOT_CLIENT_ID", "HUBSPOT_CLIENT_SECRET"), _hubspot_auth, _hubspot_exchange),
+    Provider("github", "GitHub", "github_client_id", "github_client_secret",
+             ("GITHUB_CLIENT_ID", "GITHUB_CLIENT_SECRET"), _github_auth, _github_exchange),
 ]}
 
 # which sign-in each connector uses
 CONNECTOR_SIGNIN = {"sheets": "google", "email": "google", "stripe": "stripe", "notion": "notion",
-                    "slack": "slack", "discord": "discord", "hubspot": "hubspot", "telegram": "telegram"}
+                    "slack": "slack", "discord": "discord", "hubspot": "hubspot", "telegram": "telegram",
+                    "github": "github"}
 
 
 def available() -> dict:
@@ -316,6 +354,9 @@ async def disconnect(provider: str) -> None:
             if provider == "notion" and st.get("access_token") and available()["notion"]:
                 await c.post("https://api.notion.com/v1/oauth/revoke", auth=(_cid("notion"), _csecret("notion")),
                              json={"token": st["access_token"]})
+            if provider == "github" and st.get("access_token") and available()["github"]:
+                await c.request("DELETE", f"https://api.github.com/applications/{_cid('github')}/grant",
+                                auth=(_cid("github"), _csecret("github")), json={"access_token": st["access_token"]})
             if provider == "discord" and st.get("webhook_url"):
                 await c.delete(st["webhook_url"])  # a Discord webhook can delete itself
     except httpx.HTTPError:

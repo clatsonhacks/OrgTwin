@@ -4,6 +4,13 @@ function token(): string {
   try { return localStorage.getItem("orgtwin_token") ?? ""; } catch { return ""; }
 }
 export function hasToken(): boolean { return !!token(); }
+/** Personal sign-in token from the invite link the admin sent (people mode). */
+export function userToken(): string {
+  try { return localStorage.getItem("orgtwin_user") ?? ""; } catch { return ""; }
+}
+export function setUserToken(t: string) {
+  try { if (t) localStorage.setItem("orgtwin_user", t); else localStorage.removeItem("orgtwin_user"); } catch { /* storage unavailable */ }
+}
 export function setToken(t: string) {
   try { localStorage.setItem("orgtwin_token", t); } catch { /* storage unavailable */ }
 }
@@ -11,9 +18,12 @@ export function setToken(t: string) {
 export async function api<T = any>(path: string, init: RequestInit = {}): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     ...init,
-    headers: { "Content-Type": "application/json", "X-Access-Token": token(), ...(init.headers || {}) },
+    headers: { "Content-Type": "application/json", "X-Access-Token": token(), "X-User-Token": userToken(), ...(init.headers || {}) },
   });
-  if (res.status === 401 && typeof window !== "undefined") window.dispatchEvent(new Event("orgtwin:unauthorized"));
+  // only a refused change asks someone to sign in; reading as a visitor is fine
+  if (res.status === 401 && typeof window !== "undefined" && (init.method ?? "GET") !== "GET") {
+    window.dispatchEvent(new Event("orgtwin:unauthorized"));
+  }
   if (!res.ok) {
     let msg = `${res.status}`;
     try { msg = (await res.json()).detail ?? msg; } catch { /* not json */ }
@@ -42,18 +52,19 @@ export function heatColor(hours: number, max: number): string {
 export const TOOL_ICON: Record<string, string> = {
   sheets: "📊", sandbox: "🧪", llm: "🧠", email: "✉️", stripe: "🧾", slack: "💬",
   approval: "✋", a2a: "📦", mcp: "⚙️", http: "🌐", web: "🔎",
-  discord: "🎮", teams: "🟪", telegram: "✈️", notion: "📝", hubspot: "🧲", webhook: "🌐",
+  discord: "🎮", teams: "🟪", telegram: "✈️", notion: "📝", hubspot: "🧲", webhook: "🌐", github: "🐙", agent: "🧰",
 };
 export const TOOL_NAME: Record<string, string> = {
   llm: "AI writes", sheets: "Spreadsheet", email: "Email", slack: "Slack", approval: "Human approval",
   sandbox: "Sandbox code", stripe: "Stripe invoice", a2a: "Hand off to team", web: "Web search", mcp: "MCP tool", http: "HTTP call",
   discord: "Discord", teams: "Microsoft Teams", telegram: "Telegram", notion: "Notion", hubspot: "HubSpot", webhook: "Webhook",
+  github: "GitHub", agent: "AI agent with tools",
 };
 export const ACTIONS: Record<string, { key: string; label: string }[]> = {
   sheets: [{ key: "read_rows", label: "read rows" }, { key: "update_row", label: "update row" }],
   llm: [{ key: "write", label: "write" }], email: [{ key: "send", label: "send" }],
   approval: [{ key: "request", label: "ask" }], slack: [{ key: "post", label: "post" }],
-  a2a: [{ key: "handoff", label: "hand off" }],
+  a2a: [{ key: "handoff", label: "hand off" }], agent: [{ key: "run", label: "run" }],
 };
 export function stepIcon(s: { tool: string; action?: string }) {
   if (s.tool === "sheets" && s.action === "update_row") return "✏️";

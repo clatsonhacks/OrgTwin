@@ -4,12 +4,16 @@ import { useMemo, useState } from "react";
 import type { Approval, LiveEvent, Metrics, Org, Outbox, Status, Step, Workflow } from "@/lib/types";
 import { TOOL_ICON, TOOL_NAME, stepIcon } from "@/lib/api";
 import { teamColor } from "@/components/world/layout";
+import SkillTools, { toolChips } from "./SkillTools";
+import { canEdit, useMe } from "@/lib/access";
 
 /* ---------- top bar ---------- */
 
-export function TopBar({ org, metrics, status, onRebuild, onConnect }: {
-  org: Org | null; metrics: Metrics | null; status: Status | null; onRebuild: () => void; onConnect?: () => void;
+export function TopBar({ org, metrics, status, onRebuild, onConnect, onPeople, onAsk }: {
+  org: Org | null; metrics: Metrics | null; status: Status | null; onRebuild: () => void; onConnect?: () => void; onPeople?: () => void;
+  onAsk?: () => void;
 }) {
+  const me = useMe();
   const mocked = status ? Object.entries(status.modes).filter(([k, v]) => v === "mock" && k !== "runner").map(([k]) => k) : [];
   return (
     <header className="topbar">
@@ -29,6 +33,19 @@ export function TopBar({ org, metrics, status, onRebuild, onConnect }: {
           <Stat icon="▣" value={`${metrics.steps_executed}`} label="steps executed" />
           <Stat icon="⏱" value={`${metrics.hours_saved}h`} label="saved" accent />
         </div>
+      )}
+      {onAsk && (
+        <button className="ask block" onClick={onAsk} aria-label="Ask a team">
+          <span aria-hidden>📥</span><span className="who-txt"><b>Ask a team</b><small>any department&apos;s skill</small></span>
+        </button>
+      )}
+      {onPeople && me && (
+        <button className="who block" onClick={onPeople} title="People & quests">
+          {me.user ? <><span className="p-avatar" aria-hidden>{me.user.name[0]?.toUpperCase()}</span>
+                       <span className="who-txt"><b>{me.user.name}</b><small>{me.admin ? "👑 admin" : me.user.departments.map((k) => org?.teams.find((t) => t.key === k)?.name ?? k).join(", ") || "member"}</small></span></>
+            : me.setup_needed ? <span className="who-txt"><b>👑 Set up admin</b><small>invite your team</small></span>
+            : <span className="who-txt"><b>🔑 Sign in</b><small>with your invite link</small></span>}
+        </button>
       )}
       {status && (
         <button className={`mode block ${status.demo_mode ? "mode-demo" : "mode-live"}`} onClick={onConnect} disabled={!onConnect}
@@ -345,10 +362,13 @@ export function Activity({ outbox, events }: { outbox: Outbox; events: LiveEvent
 
 /* ---------- org skill library ---------- */
 
-export function SkillLibrary({ org, workflows, onRun, onOpenTeam }: {
+export function SkillLibrary({ org, workflows, onRun, onOpenTeam, onChanged, onError }: {
   org: Org; workflows: Workflow[]; onRun: (id: number) => void; onOpenTeam: (team: string, role: string, person?: string) => void;
+  onChanged?: () => void; onError?: (m: string) => void;
 }) {
   const skills = workflows.filter((w) => w.kind === "skill");
+  const me = useMe();
+  const [tools, setTools] = useState<Workflow | null>(null);
   if (!skills.length) {
     return (
       <section>
@@ -372,9 +392,13 @@ export function SkillLibrary({ org, workflows, onRun, onOpenTeam }: {
                   <b>📘 {s.name}</b>
                   <div className="muted">👤 {owner?.name ?? "—"} · {role?.name ?? s.role_key} · {s.steps.length} steps · learned from {s.meta?.how ?? "a recording"}</div>
                   <div className="mini-steps">{s.steps.map((st, k) => <span key={k} title={st.title}>{stepIcon(st)}</span>)}</div>
+                  {(s.meta?.tools?.length ?? 0) > 0 && (
+                    <div className="tool-chips">🧰 {toolChips(s.meta?.tools).map((x) => <span key={x} className="chip chip-sm">{x}</span>)}</div>
+                  )}
                 </div>
                 <div className="col-btns">
                   <button className="btn btn-go" disabled={!s.executable} onClick={() => onRun(s.id)}>▶ Run</button>
+                  {canEdit(me, s.team_key) && <button className="btn btn-sm" onClick={() => setTools(s)}>🧰 Tools</button>}
                   <button className="linkbtn" onClick={() => onOpenTeam(s.team_key, s.role_key, owner?.id)}>visit desk</button>
                 </div>
               </div>
@@ -382,6 +406,7 @@ export function SkillLibrary({ org, workflows, onRun, onOpenTeam }: {
           })}
         </section>
       ))}
+      {tools && <SkillTools wf={tools} onClose={() => setTools(null)} onSaved={() => onChanged?.()} onError={(m) => onError?.(m)} />}
     </>
   );
 }

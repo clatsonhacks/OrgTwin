@@ -67,6 +67,17 @@ ID/secret go in `DISCORD_CLIENT_ID` / `DISCORD_CLIENT_SECRET`. OrgTwin asks for 
 the chat themselves. OrgTwin reads the bot's updates (`getUpdates`) to spot the Start message, so don't also
 point a webhook at the same bot.
 
+**GitHub**: github.com/settings/developers → *New OAuth App*. Homepage = your app URL, callback =
+`<PUBLIC_API_URL>/api/oauth/github/callback`. Put the client ID/secret in `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET`.
+Users sign in, allow the `repo` scope, then pick the default repo. Without the OAuth app, paste a fine-grained token
+with *Pull requests*, *Issues* and *Contents* (read & write).
+
+What GitHub steps do: `read_pr` saves the PR description plus changed code (patches, about 12k characters) as
+`{{pr}}`, so an AI step can review it. `review_pr` posts that review as a **comment** or **request changes**;
+an agent never approves, a person does. `open_pr` commits one file to a new branch and opens a PR. A typical
+"PR reviewer" skill: `github/read_pr` → `llm/write` ("review {{pr}} for bugs and risky changes", save as
+`review`) → `github/review_pr`.
+
 **Microsoft Teams** stays a pasted Workflows webhook URL. Posting through Microsoft's sign-in needs a Graph
 app with admin consent in each tenant, so it is not a one-click flow.
 
@@ -84,6 +95,7 @@ Google only accepts `https://` redirect URIs (or `http://localhost`), so a publi
 | Notion | `notion/create_page {title, content}` | `NOTION_TOKEN`, `NOTION_DATABASE_ID` | no |
 | HubSpot | `hubspot/upsert_contact {email, firstname, lastname, company, lifecyclestage}` | `HUBSPOT_TOKEN` | no |
 | Stripe | `stripe/invoice {email, name, amount, description}` (test keys only) | `STRIPE_SECRET_KEY` | yes |
+| GitHub | `github/list_prs {repo, state, save_as}` · `read_pr {repo, number, save_as}` · `review_pr {repo, number, text, event}` · `comment {repo, number, text}` · `create_issue {repo, title, body}` · `open_pr {repo, title, path, content, branch, base, body}` | `GITHUB_TOKEN`, `GITHUB_REPO` (or sign in with GitHub) | review/comment/issue/PR: yes |
 | Webhook | `webhook/request {url, method, body}` | `WEBHOOK_ENABLED`, `WEBHOOK_ALLOWED_HOSTS` | yes |
 | Web search | `web/search {query, max_results, save_as}` · `web/read_page {url, save_as}` | none needed; `TAVILY_API_KEY` or `BRAVE_SEARCH_API_KEY` for full web results | no |
 

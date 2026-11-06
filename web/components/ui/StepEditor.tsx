@@ -34,6 +34,8 @@ export function describe(s: Step): string {
   if (s.tool === "webhook") return `${each}${p.method || "POST"} ${p.url}`;
   if (s.tool === "web" && s.action === "read_page") return `${each}read ${p.url} → {{${p.save_as || "page"}}}`;
   if (s.tool === "web") return `${each}search the web for “${p.query}” → {{${p.save_as || "search"}}}`;
+  if (s.tool === "agent") return `${each}🧰 AI agent uses this skill's tools: ${p.instruction}`;
+  if (s.tool === "github") return `${each}GitHub ${s.action?.replace("_", " ")}${p.number ? ` #${p.number}` : ""}${p.repo ? ` in ${p.repo}` : ""}`;
   if (s.tool === "a2a") return `pass the work to the ${p.to} agent${p.message ? `: “${p.message}”` : ""}`;
   return s.description || TOOL_NAME[s.tool] || s.tool;
 }
@@ -67,6 +69,7 @@ export default function StepEditor({ steps, onChange, teams }: { steps: Step[]; 
     const c = conns[tool];
     if (tool === "a2a") return set(i, { tool, action: "handoff", per_row: false, needs_approval: false,
                                          params: { to: teams?.find((t) => t.key !== steps[i].team)?.key ?? "", message: steps[i].title } });
+    if (tool === "agent") return set(i, { tool, action: "run", per_row: false, params: { instruction: "{{request}}", save_as: "result" } });
     if (!c) return set(i, { tool, action: ACTIONS[tool]?.[0]?.key, params: {} });
     const a = c.actions[0];
     set(i, { tool, action: a.key, needs_approval: a.external, params: Object.fromEntries(a.params.map((x) => [x.name, x.default])) });
@@ -115,7 +118,15 @@ export default function StepEditor({ steps, onChange, teams }: { steps: Step[]; 
                     {ACTIONS[s.tool].map((a) => <option key={a.key} value={a.key}>{a.label}</option>)}
                   </select>
                 )}
-                {!(s.tool === "sheets" && s.action === "read_rows") && s.tool !== "a2a" && (
+                {conns[s.tool] && conns[s.tool].actions.length > 1 && (
+                  <select value={s.action} aria-label="Action" onChange={(e) => {
+                    const a = conns[s.tool].actions.find((x) => x.key === e.target.value)!;
+                    set(i, { action: a.key, needs_approval: a.external, params: Object.fromEntries(a.params.map((x) => [x.name, x.default])) });
+                  }}>
+                    {conns[s.tool].actions.map((a) => <option key={a.key} value={a.key}>{a.label}</option>)}
+                  </select>
+                )}
+                {!(s.tool === "sheets" && s.action === "read_rows") && s.tool !== "a2a" && s.tool !== "agent" && (
                   <label className="check"><input type="checkbox" checked={!!s.per_row} onChange={(e) => set(i, { per_row: e.target.checked })} /> each row</label>
                 )}
                 <label className="check"><input type="checkbox" checked={!!s.needs_approval} onChange={(e) => set(i, { needs_approval: e.target.checked })} /> approval</label>
@@ -146,6 +157,13 @@ export default function StepEditor({ steps, onChange, teams }: { steps: Step[]; 
                   <label>save as <input value={p.save_as ?? ""} onChange={(e) => setP(i, "save_as", e.target.value)} /></label>
                 </div>
               )}
+              {s.tool === "agent" && (
+                <div className="params col">
+                  <label>task <textarea rows={2} value={p.instruction ?? ""} placeholder="e.g. Answer {{request}} using the helpdesk tools" onChange={(e) => setP(i, "instruction", e.target.value)} /></label>
+                  <label>save as <input value={p.save_as ?? ""} placeholder="result" onChange={(e) => setP(i, "save_as", e.target.value)} /></label>
+                  <span className="muted">Uses the tools ticked under 🧰 Tools. Write {"{{request}}"} to use what someone asked for.</span>
+                </div>
+              )}
               {s.tool === "approval" && (
                 <div className="params col"><label>ask <input value={p.title ?? ""} onChange={(e) => setP(i, "title", e.target.value)} /></label></div>
               )}
@@ -164,7 +182,7 @@ export default function StepEditor({ steps, onChange, teams }: { steps: Step[]; 
                         : <input value={p[x.name] ?? ""} placeholder={x.default} onChange={(e) => setP(i, x.name, e.target.value)} />}
                     </label>
                   ))}
-                  {conns[s.tool].mode === "mock" && <span className="muted">Demo mode — set {conns[s.tool].env.join(", ")} to go live.</span>}
+                  {conns[s.tool].mode === "mock" && <span className="muted">Demo mode — connect {conns[s.tool].name} in 🔌 Connectors to go live.</span>}
                 </div>
               )}
             </div>

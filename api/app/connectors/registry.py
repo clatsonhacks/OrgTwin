@@ -12,8 +12,10 @@ says which mode ran.
 from __future__ import annotations
 
 import asyncio
+import base64
 import ipaddress
 import json
+import re
 import socket
 import time
 from dataclasses import dataclass, field
@@ -356,6 +358,121 @@ async def _web(action: str, p: dict) -> dict:
     return {**rec, "save_as": save_as, "text": text}
 
 
+# ---------------- developer: GitHub (pull requests + issues) ----------------
+
+GH_API = "https://api.github.com"
+
+
+def _gh_headers() -> dict:
+    return {"Authorization": f"Bearer {settings.github_token}", "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "OrgTwin"}
+
+
+def _gh_repo(p: dict) -> str:
+    repo = (p.get("repo") or settings.github_repo or "").strip().removeprefix("https://github.com/").strip("/")
+    if repo.count("/") != 1:
+        raise RuntimeError("GitHub step needs a repo like owner/name (pick a default repo in Connectors → GitHub)")
+    return repo
+
+
+def _gh_num(p: dict) -> int:
+    try:
+        return int(str(p.get("number", "")).strip().lstrip("#"))
+    except ValueError as e:
+        raise RuntimeError("GitHub step needs a PR / issue number") from e
+
+
+async def _gh(method: str, path: str, body: dict | None = None, params: dict | None = None) -> dict | list:
+    async with httpx.AsyncClient(timeout=20, base_url=GH_API, headers=_gh_headers()) as c:
+        r = await c.request(method, path, json=body, params=params)
+    _raise(r, "GitHub")
+    return r.json() if r.content else {}
+
+
+_GH_MOCK_PRS = [{"number": 42, "title": "Add CSV export to the reports page (demo)", "user": "dev-sam",
+                 "files": [("web/reports/export.ts", "+ export function toCsv(rows) { … }")]},
+                {"number": 41, "title": "Fix timezone bug in weekly digest (demo)", "user": "dev-ana",
+                 "files": [("api/digest.py", "- now = datetime.now()\n+ now = datetime.now(timezone.utc)")]}]
+
+
+async def _github(action: str, p: dict) -> dict:
+    live = bool(settings.github_token)
+    repo = _gh_repo(p) if live or p.get("repo") or settings.github_repo else "demo/repo"
+    save_as = re.sub(r"\W+", "_", p.get("save_as") or "").strip("_")
+    if action == "list_prs":
+        state = (p.get("state") or "open").lower()
+        if live:
+            prs = await _gh("GET", f"/repos/{repo}/pulls", params={"state": state, "per_page": 20})
+            items = [{"number": x["number"], "title": x["title"], "user": x["user"]["login"], "url": x["html_url"]} for x in prs]
+        else:
+            items = [{"number": x["number"], "title": x["title"], "user": x["user"], "url": ""} for x in _GH_MOCK_PRS]
+        text = "\n".join(f"#{x['number']} {x['title']} (by {x['user']})" for x in items) or f"No {state} pull requests."
+        rec = _record("github", action, "live" if live else "mock", f"{len(items)} {state} PR(s) in {repo}", {"prs": items})
+        return {**rec, "save_as": save_as or "prs", "text": f"Pull requests in {repo}:\n{text}"}
+    if action == "read_pr":
+        n = _gh_num(p)
+        if live:
+            pr = await _gh("GET", f"/repos/{repo}/pulls/{n}")
+            files = await _gh("GET", f"/repos/{repo}/pulls/{n}/files", params={"per_page": 50})
+            parts = [f"PR #{n}: {pr['title']} by {pr['user']['login']} ({pr['state']})", (pr.get("body") or "")[:2000]]
+            budget = 12000
+            for f in files:
+                patch = (f.get("patch") or "(binary or too large)")[: max(0, budget)]
+                budget -= len(patch)
+                parts.append(f"--- {f['filename']} (+{f['additions']} -{f['deletions']})\n{patch}")
+            text = "\n\n".join(parts)
+        else:
+            pr = next((x for x in _GH_MOCK_PRS if x["number"] == n), _GH_MOCK_PRS[0])
+            text = f"PR #{pr['number']}: {pr['title']} by {pr['user']}\n\n" + "\n".join(f"--- {a}\n{b}" for a, b in pr["files"])
+        rec = _record("github", action, "live" if live else "mock", f"read PR #{n} in {repo}", {"number": n})
+        return {**rec, "save_as": save_as or "pr", "text": text}
+    if action == "comment":
+        n, text = _gh_num(p), p.get("text", "")[:60000]
+        if live:
+            out = await _gh("POST", f"/repos/{repo}/issues/{n}/comments", {"body": text})
+            return _record("github", action, "live", f"commented on #{n} in {repo}", {"url": out.get("html_url")})
+        return _record("github", action, "mock", f"comment on #{n} in {repo}: {text}", {})
+    if action == "review_pr":
+        n, text = _gh_num(p), p.get("text", "")[:60000]
+        event = (p.get("event") or "COMMENT").upper()
+        if event not in ("COMMENT", "REQUEST_CHANGES"):
+            event = "COMMENT"  # agents never approve a PR; a person does that
+        if live:
+            out = await _gh("POST", f"/repos/{repo}/pulls/{n}/reviews", {"body": text, "event": event})
+            return _record("github", action, "live", f"reviewed PR #{n} ({event.lower()})", {"url": out.get("html_url")})
+        return _record("github", action, "mock", f"review PR #{n} ({event.lower()}): {text}", {})
+    if action == "create_issue":
+        title, body = p.get("title", "")[:250] or "Request from OrgTwin", p.get("body", "")[:60000]
+        if live:
+            out = await _gh("POST", f"/repos/{repo}/issues", {"title": title, "body": body})
+            return _record("github", action, "live", f"opened issue #{out['number']}: {title}", {"url": out.get("html_url")})
+        return _record("github", action, "mock", f"open issue in {repo}: {title}", {"body": body[:500]})
+    if action == "open_pr":
+        title = p.get("title", "")[:250] or "Change from OrgTwin"
+        path, content = p.get("path", "").strip().lstrip("/"), p.get("content", "")
+        branch = re.sub(r"[^\w./-]+", "-", p.get("branch") or f"orgtwin/{int(time.time())}").strip("-")
+        if not path:
+            raise RuntimeError("open_pr needs a file path to change")
+        if not live:
+            return _record("github", action, "mock", f"open PR “{title}” in {repo} ({path} on {branch})", {"content": content[:500]})
+        info = await _gh("GET", f"/repos/{repo}")
+        base = p.get("base") or info["default_branch"]
+        ref = await _gh("GET", f"/repos/{repo}/git/ref/heads/{base}")
+        await _gh("POST", f"/repos/{repo}/git/refs", {"ref": f"refs/heads/{branch}", "sha": ref["object"]["sha"]})
+        sha = None
+        try:
+            sha = (await _gh("GET", f"/repos/{repo}/contents/{path}", params={"ref": branch})).get("sha")
+        except RuntimeError:
+            pass  # new file
+        await _gh("PUT", f"/repos/{repo}/contents/{path}", {
+            "message": title, "branch": branch, "content": base64.b64encode(content.encode()).decode(),
+            **({"sha": sha} if sha else {})})
+        pr = await _gh("POST", f"/repos/{repo}/pulls", {"title": title, "head": branch, "base": base,
+                                                         "body": (p.get("body") or "") + "\n\n_Opened by an OrgTwin agent._"})
+        return _record("github", action, "live", f"opened PR #{pr['number']}: {title}", {"url": pr.get("html_url")})
+    raise RuntimeError(f"GitHub has no action {action!r}")
+
+
 # ---------------- the registry ----------------
 
 TEXT = [Param("text", "{{summary}}", "message", long=True)]
@@ -403,6 +520,35 @@ CONNECTORS: dict[str, Connector] = {c.key: c for c in [
                                  "call any HTTPS endpoint (Zapier, Make, n8n, your own API)")},
               lambda: settings.webhook_enabled, _webhook,
               "Set WEBHOOK_ENABLED=true. Optionally limit targets with WEBHOOK_ALLOWED_HOSTS=hooks.zapier.com,…"),
+    Connector("github", "GitHub", "🐙", "developer", ["GITHUB_TOKEN", "GITHUB_REPO"],
+              {"list_prs": Action("list_prs", "list pull requests",
+                                  [Param("repo", "", "repo (owner/name, empty = default)"), Param("state", "open", "state"),
+                                   Param("save_as", "prs", "save as")],
+                                  "list a repo's pull requests, saved as {{<save_as>}}", manual_min=3, external=False),
+               "read_pr": Action("read_pr", "read a pull request",
+                                 [Param("repo", "", "repo (owner/name, empty = default)"), Param("number", "", "PR number"),
+                                  Param("save_as", "pr", "save as")],
+                                 "read a PR's description and changed code, saved as {{<save_as>}} for an AI review",
+                                 manual_min=10, external=False),
+               "review_pr": Action("review_pr", "review a pull request",
+                                   [Param("repo", "", "repo"), Param("number", "", "PR number"),
+                                    Param("text", "{{review}}", "review", long=True), Param("event", "COMMENT", "COMMENT or REQUEST_CHANGES")],
+                                   "post a review on a PR (agents never approve; a person does)", manual_min=15),
+               "comment": Action("comment", "comment on PR / issue",
+                                 [Param("repo", "", "repo"), Param("number", "", "PR / issue number"),
+                                  Param("text", "{{summary}}", "comment", long=True)],
+                                 "comment on a pull request or issue", manual_min=3),
+               "create_issue": Action("create_issue", "open an issue",
+                                      [Param("repo", "", "repo"), Param("title", "", "title"),
+                                       Param("body", "{{summary}}", "body", long=True)],
+                                      "open a GitHub issue", manual_min=5),
+               "open_pr": Action("open_pr", "open a pull request",
+                                 [Param("repo", "", "repo"), Param("title", "", "title"), Param("path", "", "file to change"),
+                                  Param("content", "{{summary}}", "new file content", long=True), Param("branch", "", "branch (optional)"),
+                                  Param("base", "", "base branch (optional)"), Param("body", "", "description", long=True)],
+                                 "commit one file to a new branch and open a pull request", manual_min=20)},
+              lambda: bool(settings.github_token), _github,
+              "Sign in with GitHub, or paste a fine-grained token with Pull requests + Issues + Contents access."),
     Connector("web", "Web search", "🔎", "research", ["TAVILY_API_KEY", "BRAVE_SEARCH_API_KEY"],
               {"search": Action("search", "search the web",
                                 [Param("query", "", "search for"), Param("max_results", "5", "results"),
@@ -484,6 +630,12 @@ async def test(key: str, url: str = "") -> dict:
         _raise(r, "Notion")
         title = "".join(t.get("plain_text", "") for t in r.json().get("title", [])) or "database"
         return {"ok": True, "mode": "live", "message": f"Can write to Notion “{title}”."}
+    if key == "github":
+        if not settings.github_repo:
+            me = await _gh("GET", "/user")
+            return {"ok": True, "mode": "live", "message": f"GitHub token works ({me.get('login')}). Pick a default repo."}
+        info = await _gh("GET", f"/repos/{settings.github_repo}")
+        return {"ok": True, "mode": "live", "message": f"Can reach {info['full_name']} ({info.get('open_issues_count', 0)} open issues + PRs)."}
     if key == "hubspot":
         from ..oauth import hubspot_token
         async with httpx.AsyncClient(timeout=15) as cl:

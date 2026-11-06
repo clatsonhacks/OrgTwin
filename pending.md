@@ -88,7 +88,19 @@ You can add both addresses to the same registration.
 - [ ] Users then see Slack's own **"Sign in to your workspace"** page, pick a channel, and click Allow.
 - Until then: paste an Incoming Webhook URL in the Slack card.
 
-### 1.8 Microsoft Teams: stays a pasted webhook
+### 1.8 GitHub · ~3 min · works locally ✅
+- [ ] https://github.com/settings/developers → **New OAuth App** → name `OrgTwin`, homepage `http://localhost:3000`.
+- [ ] Authorization callback URL: `http://localhost:8000/api/oauth/github/callback`.
+- [ ] Copy the **Client ID**, click **Generate a new client secret**, and put them in `.env`: `GITHUB_CLIENT_ID=` / `GITHUB_CLIENT_SECRET=`.
+- [ ] Restart the API → GitHub card → **Connect** → **Authorize** → pick the repo agents work on.
+
+### 1.9 People & requests (no registration)
+- [ ] 👥 top-bar chip → **Become the admin**.
+- [ ] Invite someone from IT: tick their department(s), copy the link, send it to them.
+- [ ] Have them record a skill in their department; then from Sales use **📥 Ask a team**.
+- [ ] Optional: add an MCP server (🔌 Connectors → MCP servers) and tick it under 🧰 Tools on a skill.
+
+### 1.10 Microsoft Teams: stays a pasted webhook
 One-click for Teams needs a Microsoft Graph app with admin consent in every company's tenant. Use
 Teams → channel → **Workflows → "Post to a channel when a webhook request is received"** and paste the URL.
 

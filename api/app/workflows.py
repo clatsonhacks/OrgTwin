@@ -27,14 +27,16 @@ CORE_EXEC: dict[str, list[str]] = {
     "approval": ["request"],
     "slack": ["post"],
     "a2a": ["handoff"],  # pass the work (and everything gathered so far) to another department's agent
+    "agent": ["run"],    # an AI agent that calls the skill's granted tools (MCP servers, GitHub, …) itself
 }
 # Connector tools (Discord, Teams, Telegram, Notion, HubSpot, Stripe, webhook, web) come from the registry.
 EXEC: dict[str, list[str]] = {**CORE_EXEC, **{k: list(c.actions) for k, c in registry.CONNECTORS.items()}}
-TOOLS = list(EXEC) + ["sandbox", "mcp"]
+TOOLS = list(EXEC) + ["sandbox"]
 DEFAULT_ACTION = {"sheets": "read_rows", "llm": "write", "email": "send", "approval": "request", "slack": "post",
-                  "a2a": "handoff", **{k: next(iter(c.actions)) for k, c in registry.CONNECTORS.items()}}
+                  "a2a": "handoff", "agent": "run", **{k: next(iter(c.actions)) for k, c in registry.CONNECTORS.items()}}
 TOOL_ALIASES = {
-    "handoff": "a2a", "hand_off": "a2a", "agent": "a2a", "delegate": "a2a",
+    "handoff": "a2a", "hand_off": "a2a", "delegate": "a2a", "mcp": "agent", "tools": "agent", "ai_agent": "agent",
+    "git": "github", "gh": "github", "pull_request": "github", "pr": "github",
     "search": "web", "web_search": "web", "websearch": "web", "google": "web", "browser": "web", "internet": "web",
     "excel": "sheets", "spreadsheet": "sheets", "google_sheets": "sheets", "googlesheets": "sheets",
     "sheet": "sheets", "csv": "sheets", "crm": "sheets",
@@ -47,7 +49,7 @@ TOOL_ALIASES = {
     "hubspot_crm": "hubspot", "notion_page": "notion", "tg": "telegram",
 }
 # Minutes a person would spend on each step (per row for per-row steps) — used for "hours saved".
-MANUAL_MIN = {"read_rows": 2, "update_row": 1, "write": 5, "send": 3, "request": 0, "post": 2, "handoff": 10}
+MANUAL_MIN = {"read_rows": 2, "update_row": 1, "write": 5, "send": 3, "request": 0, "post": 2, "handoff": 10, "run": 15}
 
 
 def _manual_min(tool: str, action: str) -> float:
@@ -65,6 +67,8 @@ Allowed tool/action/params:
 - email/send: {"to": "{{row.email}}", "subject": str, "instruction": str}  (the AI writes the body from the instruction)
 - approval/request: {"title": str}
 - slack/post: {"text": str}
+- agent/run: {"instruction": str, "save_as": str}  (an AI agent that uses this skill's granted tools, e.g. MCP servers,
+  by itself until the task is done; the answer is saved as {{<save_as>}})
 HANDOFF_LINECONNECTOR_LINES
 Templates: {{row.<column>}} inside per-row steps, {{count}} = rows read, {{<save_as>}} = text saved by an earlier
 llm/write or web step. Columns available in the sheet: COLUMNS.
@@ -118,6 +122,9 @@ def normalize_step(s: dict) -> dict:
     elif tool == "llm":
         params = {"instruction": str(params.get("instruction") or s.get("description") or s.get("title") or ""),
                   "save_as": re.sub(r"\W+", "_", str(params.get("save_as") or "note")).strip("_") or "note"}
+    elif tool == "agent":
+        params = {"instruction": str(params.get("instruction") or s.get("description") or s.get("title") or ""),
+                  "save_as": re.sub(r"\W+", "_", str(params.get("save_as") or "result")).strip("_") or "result"}
     elif tool == "approval":
         params = {"title": str(params.get("title") or s.get("title") or "Please approve")}
     elif tool == "slack":
@@ -134,7 +141,7 @@ def normalize_step(s: dict) -> dict:
             params = {"text": params.get("text") or s.get("description") or s.get("title") or "", **params}
         params = registry.normalize_params(tool, action, params)
     per_row = (_bool(s.get("per_row")) and not (tool == "sheets" and action == "read_rows")
-               and tool != "a2a")
+               and tool not in ("a2a", "agent"))
     spec = registry.spec(tool, action)
     approval = _bool(s.get("needs_approval")) if "needs_approval" in s else bool(spec and spec.external)
     out = {"title": str(s.get("title") or action or tool)[:100], "tool": tool, "action": action,

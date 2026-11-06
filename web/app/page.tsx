@@ -1,7 +1,8 @@
 "use client";
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { API_BASE, api, hasToken, post } from "@/lib/api";
+import { API_BASE, api, hasToken, post, setUserToken } from "@/lib/api";
+import { loadMe } from "@/lib/access";
 import type { Approval, LiveEvent, Metrics, Org, Outbox, Status, Workflow } from "@/lib/types";
 import type { Courier } from "@/components/world/World";
 import StartCard from "@/components/ui/StartCard";
@@ -12,6 +13,8 @@ import SkillRecorder from "@/components/ui/SkillRecorder";
 import OrgGraph from "@/components/ui/OrgGraph";
 import ConnectorsPanel from "@/components/ui/Connectors";
 import Unlock from "@/components/ui/Unlock";
+import PeoplePanel from "@/components/ui/People";
+import RequestsPanel from "@/components/ui/Requests";
 import FlowBuilder from "@/components/ui/FlowBuilder";
 import type { RunView } from "@/components/ui/Hud";
 import { teamColor } from "@/components/world/layout";
@@ -19,7 +22,7 @@ import { ownerOf, type Person } from "@/lib/people";
 
 const World = dynamic(() => import("@/components/world/World"), { ssr: false });
 
-type Panel = "team" | "run" | "activity" | "skills" | "connectors" | null;
+type Panel = "team" | "run" | "activity" | "skills" | "connectors" | "people" | "requests" | null;
 
 export default function Home() {
   const [status, setStatus] = useState<Status | null>(null);
@@ -47,6 +50,8 @@ export default function Home() {
   const [graphVersion, setGraphVersion] = useState(0);
   const [showFlows, setShowFlows] = useState(false);
   const [unlock, setUnlock] = useState(false);
+  const [peopleVersion, setPeopleVersion] = useState(0);
+  const [reqVersion, setReqVersion] = useState(0);
   const [barWfId, setBarWfId] = useState<number | null>(null); // workflow on the bottom bar (null = lead-to-cash)
   const runIdRef = useRef<number | null>(null);
   runIdRef.current = runId;
@@ -74,7 +79,14 @@ export default function Home() {
       if (s.auth_required && !hasToken()) setUnlock(true);
     }).catch((e) => toast(`API not reachable: ${e.message}`, "bad"));
     refresh();
-    const onUnauthorized = () => setUnlock(true);
+    const invite = new URLSearchParams(window.location.search).get("invite");
+    if (invite) {  // the admin's invite link signs this person in
+      post<{ name: string }>("/api/people/join", { token: invite }).then((p) => {
+        setUserToken(invite); loadMe(true); setPanel("people"); toast(`👋 Welcome, ${p.name}`, "ok");
+      }).catch((e) => toast(e.message, "bad"))
+        .finally(() => window.history.replaceState(null, "", window.location.pathname));
+    }
+    const onUnauthorized = () => { loadMe(true).then((m) => { if (!m.people_mode) setUnlock(true); else toast("Sign in with your invite link (👥 People)", "bad"); }).catch(() => setUnlock(true)); };
     window.addEventListener("orgtwin:unauthorized", onUnauthorized);
     return () => window.removeEventListener("orgtwin:unauthorized", onUnauthorized);
   }, [refresh, toast]);
@@ -125,6 +137,14 @@ export default function Home() {
           refresh(); break;
         case "connector.connected": case "connector.tested":
           refreshStatus(); break;
+        case "people.changed":
+          setPeopleVersion((v) => v + 1); break;
+        case "request.created": case "request.updated":
+          setReqVersion((v) => v + 1); setPeopleVersion((v) => v + 1);
+          if (ev.type === "request.updated" && p.status === "done") toast(`📥 “${String(p.text).slice(0, 60)}” — done by ${cap(p.team_key)}`, "ok");
+          break;
+        case "skill.tools":
+          refresh(); break;
       }
     };
     return () => es.close();
@@ -216,7 +236,9 @@ export default function Home() {
       </div>
 
       <TopBar org={org} metrics={metrics} status={status} onRebuild={() => setOnboarding(true)}
-              onConnect={org ? () => setPanel("connectors") : undefined} />
+              onConnect={org ? () => setPanel("connectors") : undefined}
+              onPeople={org ? () => setPanel(panel === "people" ? null : "people") : undefined}
+              onAsk={org && !showStart ? () => setPanel(panel === "requests" ? null : "requests") : undefined} />
 
       {org && !showStart && (
         <>
@@ -236,6 +258,8 @@ export default function Home() {
           {/* phones: one swipeable row with the panels and every department */}
           <nav className="mdock" aria-label="Departments and panels">
             <button className={`chip-btn chip-flow ${showFlows ? "on" : ""}`} onClick={() => setShowFlows(!showFlows)}>🔀 New workflow</button>
+            <button className={`chip-btn ${panel === "requests" ? "on" : ""}`} onClick={() => setPanel(panel === "requests" ? null : "requests")}>📥 Ask</button>
+            <button className={`chip-btn ${panel === "people" ? "on" : ""}`} onClick={() => setPanel(panel === "people" ? null : "people")}>👥</button>
             <button className={`chip-btn ${showGraph ? "on" : ""}`} onClick={() => setShowGraph(true)}>🕸 Graph</button>
             <button className={`chip-btn ${panel === "skills" ? "on" : ""}`} onClick={() => setPanel(panel === "skills" ? null : "skills")}>
               📘{skills.length > 0 && <span className="count count-skill">{skills.length}</span>}
@@ -262,11 +286,22 @@ export default function Home() {
           {panel === "run" && <SidePanel title="Run details" onClose={() => setPanel(null)}><RunDetails view={view} teamName={teamName} /></SidePanel>}
           {panel === "skills" && (
             <SidePanel title="Skill library" onClose={() => setPanel(null)}>
-              <SkillLibrary org={org} workflows={workflows} onRun={runWorkflow}
+              <SkillLibrary org={org} workflows={workflows} onRun={runWorkflow} onChanged={refresh} onError={(m) => toast(m, "bad")}
                             onOpenTeam={(t, r, person) => { if (person) { enter(t); selectPerson(person); } else { setSelectedTeam(t); setSelectedRole(r); setPanel("team"); } }} />
             </SidePanel>
           )}
           {panel === "connectors" && <SidePanel title="Connectors" onClose={() => setPanel(null)}><ConnectorsPanel onError={(m) => toast(m, "bad")} onToast={(m) => { toast(m, "ok"); refreshStatus(); }} /></SidePanel>}
+          {panel === "people" && (
+            <SidePanel title="People & quests" onClose={() => setPanel(null)}>
+              <PeoplePanel org={org} version={peopleVersion} onError={(m) => toast(m, "bad")} onToast={(m) => { toast(m, "ok"); setPeopleVersion((v) => v + 1); }} />
+            </SidePanel>
+          )}
+          {panel === "requests" && (
+            <SidePanel title="Ask a team" onClose={() => setPanel(null)}>
+              <RequestsPanel org={org} workflows={workflows} version={reqVersion} onError={(m) => toast(m, "bad")}
+                             onWatch={() => setPanel("run")} />
+            </SidePanel>
+          )}
           {panel === "activity" && <SidePanel title="Activity" onClose={() => setPanel(null)}><Activity outbox={outbox} events={events} /></SidePanel>}
 
           <div className="bottom">

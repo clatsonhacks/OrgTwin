@@ -49,6 +49,10 @@ class Settings:
     discord_client_secret = _env("DISCORD_CLIENT_SECRET")
     hubspot_client_id = _env("HUBSPOT_CLIENT_ID")                      # HubSpot public app
     hubspot_client_secret = _env("HUBSPOT_CLIENT_SECRET")
+    github_client_id = _env("GITHUB_CLIENT_ID")                        # GitHub OAuth app (scope: repo)
+    github_client_secret = _env("GITHUB_CLIENT_SECRET")
+    # Skills can call tools on MCP servers. Private/LAN addresses are refused unless this is true.
+    mcp_allow_private = _env("MCP_ALLOW_PRIVATE").lower() in ("1", "true", "yes")
     # Filled in from the app when a user signs in (see userconfig.py), never from .env
     google_refresh_token = ""
     google_account = ""
@@ -61,6 +65,8 @@ class Settings:
     notion_token = _env("NOTION_TOKEN")
     notion_database_id = _env("NOTION_DATABASE_ID")
     hubspot_token = _env("HUBSPOT_TOKEN")
+    github_token = _env("GITHUB_TOKEN")      # or connected in the app (sign in with GitHub)
+    github_repo = _env("GITHUB_REPO")        # default owner/name for GitHub steps
     # Generic webhook step: off (mock) unless enabled; optionally restricted to these hosts
     webhook_enabled = _env("WEBHOOK_ENABLED").lower() in ("1", "true", "yes")
     webhook_allowed_hosts = _env("WEBHOOK_ALLOWED_HOSTS")

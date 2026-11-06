@@ -300,12 +300,13 @@ def _email_fallback(row: dict | None, instruction: str, team_name: str) -> str:
     return f"Hi {first},\n\n{ctx_line} Would you have 15 minutes this week to talk next steps?\n\nBest,\nThe {team_name} team"
 
 
-async def run_workflow(run_id: int, wf: dict, team_names: dict[str, str] | str) -> None:
-    """team_names: {team_key: name} for the whole org (a plain string still works for one team)."""
+async def run_workflow(run_id: int, wf: dict, team_names: dict[str, str] | str, inputs: dict | None = None) -> None:
+    """team_names: {team_key: name} for the whole org (a plain string still works for one team).
+    inputs: starting {{vars}}, e.g. {"request": "…", "requested_by": "…"} when someone asked for this work."""
     if isinstance(team_names, str):
         team_names = {wf["team_key"]: team_names}
     try:
-        await _run_generic(run_id, wf, team_names)
+        await _run_generic(run_id, wf, team_names, inputs or {})
     except Exception as e:
         _set_status(run_id, "failed")
         bus.emit("run.failed", {"error": f"{type(e).__name__}: {e}",
@@ -346,6 +347,22 @@ async def _exec(step: dict, ctx: dict, row: dict | None, team: str, team_name: s
         return {"email": sent, "llm": {"model": res.model, "mocked": res.mocked}}
     if tool == "slack":
         return await slack.post(render(p["text"], ctx, row))
+    if tool == "agent":
+        from . import agent
+        instr = render(p["instruction"], ctx, row)
+        data = {"earlier_results": {k: str(v)[:3000] for k, v in ctx.get("vars", {}).items()},
+                **({"rows": [_row_label(r) for r in ctx["rows"][:20]]} if ctx.get("rows") else {})}
+
+        async def approve(tool_name: str, args: dict) -> bool:
+            return await request_approval(ctx["run_id"], team, f"{team_name} agent wants to use {tool_name}",
+                                          {"tool": tool_name, "args": args, "step": step["title"]})
+
+        def on_call(call: dict) -> None:
+            bus.emit("agent.tool", {"team": team, "step": step["title"], **call}, ctx["run_id"])
+        out = await agent.run(instr, data, team_name, ctx.get("tools") or [], approve, on_call)
+        ctx.setdefault("vars", {})[p["save_as"]] = out["text"]
+        return {"save_as": p["save_as"], "text": out["text"][:800], "tool_calls": out["calls"],
+                "llm": {"model": out["model"], "mocked": out["mocked"]}}
     if tool in registry.CONNECTORS:
         out = await registry.run(tool, action, {k: render(str(v), ctx, row) for k, v in p.items()})
         if out.get("save_as") and "text" in out:  # e.g. web search results → {{search}}
@@ -355,10 +372,15 @@ async def _exec(step: dict, ctx: dict, row: dict | None, team: str, team_name: s
     raise RuntimeError(f"step {tool}.{action} cannot run in the generic engine")
 
 
-async def _run_generic(run_id: int, wf: dict, team_names: dict[str, str]) -> None:
+async def _run_generic(run_id: int, wf: dict, team_names: dict[str, str], inputs: dict | None = None) -> None:
+    from . import agent
     steps = wf["steps"]
     if not _wf.is_executable(steps):
         raise RuntimeError("this workflow uses steps the engine cannot run yet")
+    grants = list((wf.get("meta") or {}).get("tools") or [])
+    blocked = sorted({s["tool"] for s in steps if not agent.step_allowed(s["tool"], grants)})
+    if blocked:
+        raise RuntimeError(f"this skill has no access to: {', '.join(blocked)} (give it access under 🧰 Tools)")
     home = wf["team_key"]
     team_of = [s.get("team") or home for s in steps]  # each step is done by its own department's agent
     view = [{"key": f"s{i}", "team": team_of[i], "title": s["title"], "tool": s["tool"], "per_row": s["per_row"],
@@ -366,7 +388,8 @@ async def _run_generic(run_id: int, wf: dict, team_names: dict[str, str]) -> Non
     teams_in_order = list(dict.fromkeys(team_of))
     bus.emit("run.started", {"workflow": wf["name"], "workflow_id": wf["id"], "kind": wf["kind"],
                              "teams": teams_in_order, "steps": view, "modes": settings.modes()}, run_id)
-    ctx: dict = {"rows": [], "count": 0, "vars": {}}
+    ctx: dict = {"rows": [], "count": 0, "vars": {k: str(v) for k, v in (inputs or {}).items()},
+                 "run_id": run_id, "tools": grants}
     name = lambda k: team_names.get(k, k.replace("-", " ").title())  # noqa: E731
 
     async def do(i: int, row: dict | None):
@@ -441,7 +464,8 @@ async def _run_generic(run_id: int, wf: dict, team_names: dict[str, str]) -> Non
         i += 1
 
     hours = round(_wf.manual_minutes(steps, ctx["count"]) / 60, 2)
-    _ctx_update(run_id, hours_saved=hours, rows=ctx["count"])
+    _ctx_update(run_id, hours_saved=hours, rows=ctx["count"],
+                vars={k: str(v)[:4000] for k, v in ctx["vars"].items()})
     _set_status(run_id, "completed")
     chain = " → ".join(name(t) for t in teams_in_order)
     done = f"{wf['name']} — done" + (f" for {ctx['count']} row(s)" if ctx["count"] else "")

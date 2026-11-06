@@ -39,6 +39,21 @@ lights up when its agent works and every handoff travels the paths as a crate. E
 including which team does it; handoffs are kept consistent when you change a step's team. Steps can also
 **search the web** (`web/search`, `web/read_page`) and later AI steps use the results.
 
+## People, requests and skill tools
+
+- **👑 Admin + departments.** The first person becomes admin and invites the rest with a personal link,
+  ticking the departments each person looks after (green ticks). People create and edit skills only in their
+  own departments. Everyone can see and run every skill.
+- **📥 Ask a team.** A sales person writes *"I need an analysis of …"*. OrgTwin finds the skill that can do it in
+  any department (for example IT's), runs it with the request as input, and pings that department's people on
+  Slack / Discord with the result.
+- **🧰 Skill tools.** Give a skill access to apps (GitHub, Notion, …) and **MCP servers**. Its *AI agent* step
+  calls those tools by itself to finish the job, and asks a person before anything that changes something.
+- **🗺 Quests.** A setup checklist that ticks itself green as you go.
+
+Details: [docs/people.md](docs/people.md). The GitHub connector reads, reviews and comments on pull requests,
+opens issues and PRs ([docs/connectors.md](docs/connectors.md)).
+
 ## Skill Recorder: show it once, the agent learns it
 
 ![Skill Recorder review: what it picked up from the recording, and the workflow it wrote](docs/images/skill-review.png)

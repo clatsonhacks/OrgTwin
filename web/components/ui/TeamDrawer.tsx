@@ -5,6 +5,8 @@ import type { Org, SkillMatch, Step, Team, Workflow } from "@/lib/types";
 import { ownerOf, peopleOf, type Person } from "@/lib/people";
 import { teamColor } from "@/components/world/layout";
 import StepEditor, { StepList, newStep } from "./StepEditor";
+import SkillTools, { toolChips } from "./SkillTools";
+import { canEdit, useMe } from "@/lib/access";
 
 export default function TeamDrawer({ org, team, index, selectedRole, onSelectRole, workflows, onChanged, onError, onClose,
                                      onRunHero, onRunWorkflow, onRecord, inside, onEnter, onExit, selectedPerson, onSelectPerson }: {
@@ -14,6 +16,7 @@ export default function TeamDrawer({ org, team, index, selectedRole, onSelectRol
   inside: boolean; onEnter: () => void; onExit: () => void;
   selectedPerson: string | null; onSelectPerson: (id: string | null) => void;
 }) {
+  const me = useMe();
   const [goal, setGoal] = useState("");
   const [busy, setBusy] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
@@ -141,7 +144,10 @@ export default function TeamDrawer({ org, team, index, selectedRole, onSelectRol
 
       <section className="builder">
         <h3>{person ? `Teach ${person.name}` : role ? `Teach ${role.name}` : "Teach someone"}</h3>
-        {!role ? <p className="muted">{inside ? "Click someone at a desk (or pick a name above)." : "Pick a role above, or step inside and pick a person."}</p> : (
+        {!canEdit(me, team.key) ? (
+          <p className="muted locked">🔒 Only people who look after {team.name} can add skills here. You can still run every
+            skill below, or send {team.name} a request (📥 Ask a team).</p>
+        ) : !role ? <p className="muted">{inside ? "Click someone at a desk (or pick a name above)." : "Pick a role above, or step inside and pick a person."}</p> : (
           <>
             <button className="btn btn-rec" onClick={() => onRecord(person)}>🎥 Record a skill <small>show it once, {person ? person.name : "the agent"} learns it</small></button>
             <div className="or"><span>or describe it</span></div>
@@ -241,6 +247,9 @@ export function WorkflowCard({ wf, onSaved, onError, onRun, defaultOpen, owner, 
   const [open, setOpen] = useState(defaultOpen ?? wf.kind !== "hero");
   const [editing, setEditing] = useState(false);
   const [preview, setPreview] = useState<{ rows: { label: string; email: string }[] } | null>(null);
+  const [tools, setTools] = useState(false);
+  const me = useMe();
+  const mayEdit = wf.kind === "flow" || canEdit(me, wf.team_key);
   useEffect(() => { setSteps(wf.steps); setDirty(false); }, [wf.steps]);
   useEffect(() => {
     if (!open || wf.kind === "hero" || !wf.steps.some((s) => s.action === "read_rows")) return;
@@ -266,13 +275,18 @@ export function WorkflowCard({ wf, onSaved, onError, onRun, defaultOpen, owner, 
           {wf.kind === "flow" && teams && wf.teams && wf.teams.length > 1 && (
             <p className="muted">{wf.teams.map((k) => teams.find((t) => t.key === k)?.name ?? k).join(" → ")}</p>
           )}
+          {(wf.meta?.tools?.length ?? 0) > 0 && (
+            <div className="tool-chips">🧰 {toolChips(wf.meta?.tools).map((t) => <span key={t} className="chip chip-sm">{t}</span>)}</div>
+          )}
           {editing ? <StepEditor steps={steps} teams={teams} onChange={(s) => { setSteps(s); setDirty(true); }} />
                    : <StepList steps={steps} teams={teams} />}
           {preview && preview.rows.length > 0 && !editing && (
             <p className="preview-rows">Next run touches <b>{preview.rows.length}</b> row(s): {preview.rows.slice(0, 4).map((r) => r.label).join(", ")}{preview.rows.length > 4 ? "…" : ""}</p>
           )}
           <div className="row">
-            {wf.kind !== "hero" && !editing && <button className="btn" onClick={() => setEditing(true)}>Edit</button>}
+            {wf.kind !== "hero" && !editing && mayEdit && <button className="btn" onClick={() => setEditing(true)}>Edit</button>}
+            {wf.kind !== "hero" && wf.kind !== "flow" && !editing && mayEdit && <button className="btn" onClick={() => setTools(true)}>🧰 Tools</button>}
+            {wf.kind !== "hero" && !mayEdit && <span className="muted">🔒 view only</span>}
             {editing && <>
               <button className="btn" onClick={() => { setSteps([...steps, newStep(teams ? [...steps].reverse().find((x) => x.team)?.team ?? teams[0]?.key : undefined)]); setDirty(true); }}>+ Step</button>
               <button className="btn" onClick={() => { setSteps(wf.steps); setDirty(false); setEditing(false); }}>Cancel</button>
@@ -283,6 +297,7 @@ export function WorkflowCard({ wf, onSaved, onError, onRun, defaultOpen, owner, 
               ? <button className="btn btn-go" onClick={onRun}>▶ Run</button>
               : <span className="muted">Has steps the engine can&apos;t run yet</span>)}
           </div>
+          {tools && <SkillTools wf={wf} onClose={() => setTools(false)} onSaved={() => onSaved()} onError={onError} />}
         </>
       )}
     </section>
