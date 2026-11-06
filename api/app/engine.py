@@ -89,7 +89,7 @@ async def request_approval(run_id: int, team: str, title: str, payload: dict) ->
     _approval_events[ap_id] = ev
     _set_status(run_id, "waiting_approval")
     bus.emit("approval.requested", {"approval_id": ap_id, "team": team, "title": title, "payload": payload}, run_id)
-    await slack.post(f":hourglass: OrgTwin needs approval: *{title}* — {settings.public_app_url}")
+    await slack.post(f"⏳ OrgTwin needs approval: *{title}* — {settings.public_app_url}")
     await ev.wait()
     _approval_events.pop(ap_id, None)
     with SessionLocal() as s:
@@ -250,7 +250,7 @@ async def _run(run_id: int) -> None:
     hours_saved = round(MANUAL_MINUTES / 60, 2)
 
     async def notify():
-        return await slack.post(f":white_check_mark: Lead-to-cash done for *{lead['company']}*: "
+        return await slack.post(f"✅ Lead-to-cash done for *{lead['company']}*: "
                                 f"contacted → won → invoiced ${amount_cents / 100:,.2f} → onboarded. "
                                 f"~{hours_saved} h of manual work saved.")
     await _step(run_id, "notify", notify)
