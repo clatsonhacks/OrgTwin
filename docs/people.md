@@ -2,6 +2,8 @@
 
 ## People and access
 
+![Departments with green ticks](images/departments.png)
+
 Until someone becomes admin, OrgTwin is one shared workspace (optionally behind `APP_ACCESS_TOKEN`).
 Click the **👑 Set up admin** chip in the top bar (or **👥 People**) and enter your name: you are the admin.
 From then on every change needs a signed-in person.
@@ -24,6 +26,8 @@ claim the first admin.
 
 ## Requests: "I need an analysis of …"
 
+![Ask a team](images/ask-team.png)
+
 **📥 Ask a team** (top bar). Someone in Sales writes what they need. OrgTwin:
 
 1. picks the skill that fits best in **any** department. It asks the AI to choose; with no AI or no clear
@@ -40,6 +44,8 @@ one run), so a request waits its turn. Approval steps in the skill go to the own
 
 ## Skill tools and MCP
 
+![Skill tools](images/skill-tools.png)
+
 Every skill has **🧰 Tools**. Tick the apps (GitHub, Notion, Slack, web search, …) and MCP servers, or single MCP
 tools, that it may use.
 
@@ -53,6 +59,14 @@ tools, that it may use.
   and an optional bearer token. The token is never sent back to the browser. OrgTwin lists the server's tools
   (`tools/list`) and calls them with `tools/call`. Private or LAN addresses are refused unless
   `MCP_ALLOW_PRIVATE=true` (for a server on your own machine).
+
+## Quests
+
+![Quests](images/quests.png)
+
+👥 People shows a 9-step setup checklist that ticks itself green: build the company, become admin, connect an
+app, invite a teammate, give someone a department, create a skill, give a skill tools, send a cross-team request,
+and have an owner notified in Slack / Discord.
 
 ## API
 

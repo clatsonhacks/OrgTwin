@@ -7,6 +7,8 @@ it is connected. In demo mode it records what it *would* have sent, which shows 
 
 Open **🔌 Connectors** (or click **Demo mode** in the top bar) and press **Connect** on any connector.
 
+![Connect Google Sheets](images/connect.png)
+
 - **Google Sheets + Gmail, Stripe, Notion, Slack, Discord and HubSpot** open that service's own sign-in popup.
   The user signs in and clicks **Allow**; Slack and Discord show a channel picker on that same screen, and
   Notion lets the user tick the pages to share. After Notion, the user picks a database (or OrgTwin creates

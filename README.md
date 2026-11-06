@@ -14,7 +14,7 @@ team's skill, returns the answer, and pings the IT people on Slack / Discord.
 
 ![OrgTwin world: each department is a building, each role a worker agent, beacons show automatable hours](docs/images/world.png)
 
-![Live run: the Sales agent hands an invoice task to Finance as a crate; the hotbar tracks the 12 steps](docs/images/live-run.png)
+![Live run: the Sales agent hands the invoice task to Finance; the hotbar tracks the 12 steps](docs/images/live-run.png)
 
 One workflow runs **for real, end to end, across three departments: lead-to-cash.**
 
@@ -54,6 +54,8 @@ Sales (Sam) ── "I need an analysis of …" ──▶ OrgTwin picks the best 
                      result → Sam in the app · 💬 Slack / 🎮 Discord → IT's people (@mentioned)
 ```
 
+![Ask a team: Sam from Sales asked two things; Engineering's skills answered and Ivan was pinged on Slack and Discord](docs/images/ask-team.png)
+
 - **👑 Admin + departments.** The first person becomes admin and invites the rest with a personal link,
   ticking the departments each person looks after (green ticks). People create and edit skills only in their
   own departments. Everyone can see and run every skill.
@@ -68,6 +70,12 @@ Sales (Sam) ── "I need an analysis of …" ──▶ OrgTwin picks the best 
   review (comment or request changes; an agent never approves), comment, open issues, and open a PR that
   changes one file. Typical skill: `github/read_pr` → `llm/write` ("review {{pr}}") → `github/review_pr`.
 - **🗺 Quests.** A 9-step setup checklist in 👥 People that ticks itself green as you go.
+
+![People & quests: the setup checklist ticks itself green](docs/images/quests.png)
+
+![Departments: green ticks show where each person can create and edit skills](docs/images/departments.png)
+
+![Skill tools: this skill may use Slack, web search and every tool of the Helpdesk MCP server](docs/images/skill-tools.png)
 
 | | Admin | Member |
 |---|---|---|
@@ -198,6 +206,8 @@ popups, the admin registers OrgTwin once with each service (`GOOGLE_OAUTH_*`, `S
 `NOTION_OAUTH_*`, `SLACK_CLIENT_*`, `DISCORD_CLIENT_*`, `HUBSPOT_CLIENT_*`, `GITHUB_CLIENT_*`, `TELEGRAM_BOT_TOKEN`). The steps are in
 [docs/connectors.md](docs/connectors.md#one-click-sign-in-the-admins-one-time-setup). Teams, webhooks and web search open a
 short form in the app. Everything in the table below can still be set in `.env` instead.
+
+![Connect Google Sheets: sign in with Google and click Allow, no keys to copy](docs/images/connect.png)
 
 | Variable | Where to get it |
 |---|---|
