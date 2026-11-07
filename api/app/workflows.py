@@ -44,6 +44,7 @@ TOOL_ALIASES = {
     "ai": "llm", "gpt": "llm", "model": "llm", "write": "llm",
     "human": "approval", "approve": "approval", "review": "approval",
     "msteams": "teams", "microsoft_teams": "teams", "ms_teams": "teams",
+    "chat": "slack", "notify": "slack",
     "http": "webhook", "zapier": "webhook", "make": "webhook", "n8n": "webhook", "api": "webhook",
     "invoice": "stripe", "billing": "stripe", "stripe_invoice": "stripe",
     "hubspot_crm": "hubspot", "notion_page": "notion", "tg": "telegram",
@@ -66,7 +67,7 @@ Allowed tool/action/params:
 - llm/write: {"instruction": str, "save_as": str}  (the agent thinks/writes; the text is saved as {{<save_as>}})
 - email/send: {"to": "{{row.email}}", "subject": str, "instruction": str}  (the AI writes the body from the instruction)
 - approval/request: {"title": str}
-- slack/post: {"text": str}
+- slack/post: {"text": str}  (team chat: posts to every configured channel, Slack/Discord/Teams/Telegram)
 - agent/run: {"instruction": str, "save_as": str}  (an AI agent that uses this skill's granted tools, e.g. MCP servers,
   by itself until the task is done; the answer is saved as {{<save_as>}})
 HANDOFF_LINECONNECTOR_LINES
@@ -128,7 +129,9 @@ def normalize_step(s: dict) -> dict:
     elif tool == "approval":
         params = {"title": str(params.get("title") or s.get("title") or "Please approve")}
     elif tool == "slack":
-        params = {"text": str(params.get("text") or s.get("description") or s.get("title") or "")}
+        only = [c for c in params.get("channels") or [] if c in ("slack", "discord", "teams", "telegram")]
+        params = {"text": str(params.get("text") or s.get("description") or s.get("title") or ""),
+                  **({"channels": only} if only else {})}
     elif tool == "a2a":
         params = {"to": str(params.get("to") or s.get("to") or "").strip().lower(),
                   "message": str(params.get("message") or params.get("text") or s.get("description") or s.get("title") or "")}
@@ -160,7 +163,23 @@ def normalize_step(s: dict) -> dict:
 def normalize(steps) -> list[dict]:
     if isinstance(steps, dict):
         steps = steps.get("steps") or steps.get("workflow") or []
-    return [normalize_step(s) for s in (steps or []) if isinstance(s, dict)][:16]
+    return _ensure_rows([normalize_step(s) for s in (steps or []) if isinstance(s, dict)][:16])
+
+
+_ROW_TPL = re.compile(r"\{\{\s*row\.")
+
+
+def _ensure_rows(steps: list[dict]) -> list[dict]:
+    """A step that uses {{row.*}} only makes sense per row; read the sheet first if nothing does."""
+    first_read = next((i for i, s in enumerate(steps) if s["tool"] == "sheets" and s["action"] == "read_rows"), None)
+    for i, s in enumerate(steps):
+        if (first_read is None or i > first_read) and _ROW_TPL.search(json.dumps(s["params"])):
+            s["per_row"] = True
+    first_per_row = next((i for i, s in enumerate(steps) if s["per_row"]), None)
+    if first_per_row is not None and (first_read is None or first_read > first_per_row):
+        steps.insert(0, normalize_step({"title": "Read rows from the spreadsheet", "tool": "sheets",
+                                        "action": "read_rows", "params": {"limit": 10}}))
+    return steps[:16]
 
 
 def is_executable(steps: list[dict]) -> bool:
@@ -262,9 +281,11 @@ def plan_from_text(text: str, role_tasks: list[str] | None = None) -> list[dict]
         m = re.search(r"https://[^\s\"')]+", text or "")
         steps.append({"title": "Call the webhook", "tool": "webhook", "action": "request", "needs_approval": False,
                       "params": {"url": m.group(0) if m else "https://", "body": '{"count": "{{count}}", "summary": "{{summary}}"}'}})
-    if "slack" in t or (not said and ("notify" in t or "tell the team" in t)):
-        steps.append({"title": "Tell the team on Slack", "tool": "slack", "action": "post",
-                      "params": {"text": done}})
+    # Team chat: one message to every configured channel (Slack, Discord, Teams, Telegram)
+    if "slack" in t or (not said and any(w in t for w in ("notify", "tell the team", "chat"))):
+        # Channels already named get their own step above, so the broadcast only covers Slack then
+        steps.append({"title": "Tell the team in chat", "tool": "slack", "action": "post",
+                      "params": {"text": done, **({"channels": ["slack"]} if said else {})}})
     if not steps:
         for task in (role_tasks or ["Do the task"])[:3]:
             steps.append({"title": task, "tool": "llm", "action": "write",

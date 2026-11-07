@@ -4,6 +4,8 @@ import uuid
 
 from ..config import settings
 
+CURRENCY = "usd"
+
 
 def mode() -> str:
     return settings.modes()["stripe"]
@@ -14,6 +16,8 @@ def _stripe():
     if not settings.stripe_secret_key.startswith("sk_test_"):
         raise RuntimeError("Refusing to use a non-test Stripe key")
     stripe.api_key = settings.stripe_secret_key
+    # Retry dropped connections; the SDK sends an idempotency key, so a retried create can't duplicate.
+    stripe.max_network_retries = 3
     return stripe
 
 
@@ -21,10 +25,12 @@ def _create_draft(email: str, name: str, amount_cents: int, description: str) ->
     stripe = _stripe()
     found = stripe.Customer.search(query=f"email:'{email}'", limit=1)
     customer = found.data[0] if found.data else stripe.Customer.create(email=email, name=name)
-    inv = stripe.Invoice.create(customer=customer.id, collection_method="send_invoice",
+    # Set the currency explicitly: otherwise the invoice takes the account's default (e.g. SGD), and
+    # Stripe refuses to mix it with the USD item. Amounts across the app are USD.
+    inv = stripe.Invoice.create(customer=customer.id, collection_method="send_invoice", currency=CURRENCY,
                                 days_until_due=14, auto_advance=False)
     stripe.InvoiceItem.create(customer=customer.id, invoice=inv.id, amount=amount_cents,
-                              currency="usd", description=description)
+                              currency=CURRENCY, description=description)
     inv = stripe.Invoice.retrieve(inv.id)
     return {"invoice_id": inv.id, "amount_due": inv.amount_due, "status": inv.status}
 

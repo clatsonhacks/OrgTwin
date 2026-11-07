@@ -6,6 +6,8 @@ local mode: plain subprocess — for development only, NOT isolated (the result 
 """
 import asyncio
 import json
+import os
+import subprocess
 import sys
 import time
 import uuid
@@ -28,24 +30,21 @@ async def run_python(code: str, payload: dict) -> dict:
         isolation = {"type": "local", "warning": "not isolated (dev mode)"}
     env = {"PATH": "/usr/local/bin:/usr/bin:/bin"}
     if sys.platform == "win32":
-        # Windows Python cannot start without SYSTEMROOT (no secrets in it).
-        import os
-        env = {"PATH": os.environ.get("PATH", ""), "SYSTEMROOT": os.environ.get("SYSTEMROOT", r"C:\Windows")}
-    proc = await asyncio.create_subprocess_exec(
-        *cmd, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE, env=env)
+        # Windows Python can't initialise without SYSTEMROOT (needed for its random-number source).
+        env["SYSTEMROOT"] = os.environ.get("SYSTEMROOT", r"C:\Windows")
+    # Blocking subprocess in a thread, not asyncio's subprocess API: that one raises NotImplementedError
+    # on Windows' selector event loop (used by `uvicorn --reload`). run() kills the child on timeout.
     try:
-        out, err = await asyncio.wait_for(proc.communicate(json.dumps(payload).encode()),
-                                          timeout=settings.sandbox_timeout_s)
-    except asyncio.TimeoutError:
-        proc.kill()
+        proc = await asyncio.to_thread(subprocess.run, cmd, input=json.dumps(payload).encode(),
+                                       capture_output=True, env=env, timeout=settings.sandbox_timeout_s)
+    except subprocess.TimeoutExpired:
         if settings.runner == "docker":
             # Killing the docker CLI does not stop the container; destroy it explicitly.
-            killer = await asyncio.create_subprocess_exec(
-                "docker", "rm", "-f", name, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
-            await killer.wait()
+            await asyncio.to_thread(subprocess.run, ["docker", "rm", "-f", name],
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return {"ok": False, "error": "timeout", "isolation": isolation,
                 "duration_ms": int((time.monotonic() - started) * 1000)}
+    out, err = proc.stdout, proc.stderr
     result = {"ok": proc.returncode == 0, "exit_code": proc.returncode, "isolation": isolation,
               "duration_ms": int((time.monotonic() - started) * 1000),
               "stderr": err.decode(errors="replace")[-2000:]}

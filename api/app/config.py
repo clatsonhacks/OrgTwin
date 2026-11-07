@@ -1,5 +1,24 @@
 """Runtime configuration, read from environment variables (see ../.env.example)."""
 import os
+from pathlib import Path
+
+
+def _load_dotenv(path: Path) -> None:
+    """Local dev: read the repo-root .env (docker compose passes it in already). Real env vars win."""
+    if os.environ.get("ORGTWIN_NO_DOTENV") or not path.is_file():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        os.environ.setdefault(key.strip(), value)
+
+
+_load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 
 def _env(name: str, default: str = "") -> str:
@@ -81,7 +100,7 @@ class Settings:
     public_app_url = _env("PUBLIC_APP_URL", "http://localhost:3000")
     # Where the API is reachable from the browser (OAuth redirects). Same origin as the app behind Caddy.
     public_api_url = _env("PUBLIC_API_URL") or public_app_url
-    cors_origins = [o for o in _env("CORS_ORIGINS", "http://localhost:3000").split(",") if o]
+    cors_origins = [o for o in _env("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",") if o]
 
     # Execution pacing (seconds between steps) so the 3D view can animate
     step_delay_s = float(_env("STEP_DELAY_S", "1.2"))
@@ -96,8 +115,16 @@ class Settings:
             "email": "smtp" if (self.smtp_host and self.smtp_from) else "gmail" if self.google_signed_in() else "mock",
             "stripe": "stripe-test" if self.stripe_secret_key.startswith("sk_test_") else "mock",
             "slack": "webhook" if self.slack_webhook_url else "mock",
+            "chat": ", ".join(self.chat_channels()) or "mock",
             "runner": self.runner,
         }
+
+    def chat_channels(self) -> list[str]:
+        """Team-chat channels that are configured; the chat step posts to all of them."""
+        return [name for name, on in (
+            ("slack", self.slack_webhook_url), ("discord", self.discord_webhook_url),
+            ("teams", self.teams_webhook_url),
+            ("telegram", self.telegram_bot_token and self.telegram_chat_id)) if on]
 
 
 settings = Settings()

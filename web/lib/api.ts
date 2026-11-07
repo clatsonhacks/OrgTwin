@@ -55,7 +55,7 @@ export const TOOL_ICON: Record<string, string> = {
   discord: "🎮", teams: "🟪", telegram: "✈️", notion: "📝", hubspot: "🧲", webhook: "🌐", github: "🐙", agent: "🧰",
 };
 export const TOOL_NAME: Record<string, string> = {
-  llm: "AI writes", sheets: "Spreadsheet", email: "Email", slack: "Slack", approval: "Human approval",
+  llm: "AI writes", sheets: "Spreadsheet", email: "Email", slack: "Team chat", approval: "Human approval",
   sandbox: "Sandbox code", stripe: "Stripe invoice", a2a: "Hand off to team", web: "Web search", mcp: "MCP tool", http: "HTTP call",
   discord: "Discord", teams: "Microsoft Teams", telegram: "Telegram", notion: "Notion", hubspot: "HubSpot", webhook: "Webhook",
   github: "GitHub", agent: "AI agent with tools",

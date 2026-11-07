@@ -16,6 +16,10 @@ node_modules/
 out/
 *.tsbuildinfo
 
+# Local data (run history holds real lead details)
+*.db
+*.sqlite3
+
 # OS
 .DS_Store
 
