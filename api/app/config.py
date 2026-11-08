@@ -97,10 +97,10 @@ class Settings:
 
     # Optional access token for mutating endpoints on a public demo
     app_access_token = _env("APP_ACCESS_TOKEN")
-    public_app_url = _env("PUBLIC_APP_URL", "http://localhost:3000")
+    public_app_url = _env("PUBLIC_APP_URL", "http://localhost:8000")
     # Where the API is reachable from the browser (OAuth redirects). Same origin as the app behind Caddy.
     public_api_url = _env("PUBLIC_API_URL") or public_app_url
-    cors_origins = [o for o in _env("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",") if o]
+    cors_origins = [o for o in _env("CORS_ORIGINS", "http://localhost:8000,http://127.0.0.1:8000").split(",") if o]
 
     # Execution pacing (seconds between steps) so the 3D view can animate
     step_delay_s = float(_env("STEP_DELAY_S", "1.2"))
